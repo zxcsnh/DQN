@@ -12,7 +12,7 @@ class DQNConfig:
     seed: int = 42
 
     # 训练相关配置。
-    num_episodes: int = 1000
+    num_episodes: int = 2000
     max_steps: int = 1_000_000
     batch_size: int = 32
     learning_rate: float = 2.5e-4
@@ -43,8 +43,13 @@ class DQNConfig:
     save_replay_buffer: bool = False
 
     # 评估配置。
+    # 推荐按环境步数触发评估，便于不同 run 在相同训练进度下比较。
+    # 当 eval_interval_steps <= 0 时，回退为按 episode 频率评估（eval_freq）。
+    eval_interval_steps: int = 50_000
     eval_freq: int = 50
     eval_episodes: int = 10
+    # 每次评估都使用固定种子集合，避免评估样本随训练进度漂移。
+    eval_seed_offset: int = 100_000
 
     # 设备配置。
     device: str = "auto"

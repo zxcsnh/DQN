@@ -41,35 +41,55 @@ def summarize_group(runs: list[dict]) -> dict:
 
 
 def align_eval_curves(runs: list[dict]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """把不同 seed 的评估曲线裁到相同长度，便于求均值和方差。"""
-    eval_steps_list = [
-        np.array(run["summary"]["eval_steps"], dtype=np.float64) for run in runs
-    ]
-    eval_rewards_list = [
-        np.array(run["summary"]["eval_rewards"], dtype=np.float64) for run in runs
-    ]
+    """按 step 对齐评估曲线，减少不同 run 评估时刻不一致带来的偏差。"""
+    valid_runs: list[tuple[np.ndarray, np.ndarray]] = []
+    for run in runs:
+        steps = np.array(run["summary"]["eval_steps"], dtype=np.float64)
+        rewards = np.array(run["summary"]["eval_rewards"], dtype=np.float64)
+        usable_len = min(len(steps), len(rewards))
+        if usable_len == 0:
+            continue
 
-    valid_lengths = [
-        min(len(steps), len(rewards))
-        for steps, rewards in zip(eval_steps_list, eval_rewards_list, strict=False)
-        if len(steps) > 0 and len(rewards) > 0
-    ]
-    if not valid_lengths:
+        steps = steps[:usable_len]
+        rewards = rewards[:usable_len]
+
+        sort_idx = np.argsort(steps)
+        steps = steps[sort_idx]
+        rewards = rewards[sort_idx]
+
+        # np.interp 要求 x 递增，重复 step 只保留首个点。
+        unique_steps, unique_idx = np.unique(steps, return_index=True)
+        unique_rewards = rewards[unique_idx]
+        if len(unique_steps) == 0:
+            continue
+
+        valid_runs.append((unique_steps, unique_rewards))
+
+    if not valid_runs:
         return np.array([]), np.array([]), np.array([])
 
-    min_len = min(valid_lengths)
+    min_len = min(len(steps) for steps, _ in valid_runs)
+    overlap_start = max(steps[0] for steps, _ in valid_runs)
+    overlap_end = min(steps[-1] for steps, _ in valid_runs)
+
+    # 正常情况：在重叠 step 区间上插值后再求均值/方差。
+    if overlap_start < overlap_end:
+        common_steps = np.linspace(overlap_start, overlap_end, num=min_len)
+        aligned_rewards = np.stack(
+            [
+                np.interp(common_steps, run_steps, run_rewards)
+                for run_steps, run_rewards in valid_runs
+            ]
+        )
+        return common_steps, aligned_rewards.mean(axis=0), aligned_rewards.std(axis=0)
+
+    # 兜底：若重叠区间退化，回退到按序号截断聚合。
     steps = np.mean(
-        np.stack(
-            [steps[:min_len] for steps in eval_steps_list if len(steps) >= min_len]
-        ),
+        np.stack([run_steps[:min_len] for run_steps, _ in valid_runs]),
         axis=0,
     )
-    rewards = np.stack(
-        [rewards[:min_len] for rewards in eval_rewards_list if len(rewards) >= min_len]
-    )
-    reward_mean = rewards.mean(axis=0)
-    reward_std = rewards.std(axis=0)
-    return steps, reward_mean, reward_std
+    rewards = np.stack([run_rewards[:min_len] for _, run_rewards in valid_runs])
+    return steps, rewards.mean(axis=0), rewards.std(axis=0)
 
 
 def save_csv(path: str, rows: list[dict], fieldnames: list[str]):

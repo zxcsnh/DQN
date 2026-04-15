@@ -10,6 +10,25 @@ from dqn.agent import DQNAgent
 from dqn.env import make_env
 
 
+def infer_input_channels(model_path: str | None, default_channels: int) -> int:
+    """优先从 checkpoint 推断输入通道数，失败时回退到默认值。"""
+    if not model_path or not os.path.exists(model_path):
+        return default_channels
+
+    try:
+        import torch
+
+        checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
+        policy_state = checkpoint.get("policy_net", {})
+        conv1_weight = policy_state.get("conv1.weight")
+        if conv1_weight is not None and conv1_weight.ndim == 4:
+            return int(conv1_weight.shape[1])
+    except Exception as exc:
+        print(f"Warning: failed to infer input channels from checkpoint: {exc}")
+
+    return default_channels
+
+
 def play(
     env_name: str = "ALE/Pong-v5",
     model_path: str | None = None,
@@ -17,12 +36,15 @@ def play(
     render: bool = True,
     delay: float = 0.02,
     device: str = "auto",
+    frame_stack: int = 4,
 ):
     """运行若干回合，用于观察训练后策略的表现。"""
+    input_channels = infer_input_channels(model_path, frame_stack)
     render_mode = "human" if render else None
     env = make_env(
         env_name,
         render_mode=render_mode,
+        frame_stack=input_channels,
         clip_reward=False,
         terminal_on_life_loss=False,
     )
@@ -36,8 +58,13 @@ def play(
     num_actions = env.action_space.n
     print(f"Environment: {env_name}")
     print(f"Num actions: {num_actions}")
+    print(f"Input channels: {input_channels}")
 
-    agent = DQNAgent(num_actions=num_actions, device=device)
+    agent = DQNAgent(
+        num_actions=num_actions,
+        input_channels=input_channels,
+        device=device,
+    )
 
     if model_path:
         agent.load(model_path)
@@ -88,20 +115,27 @@ def record_video(
     num_episodes: int = 3,
     output_dir: str = "videos",
     fps: int = 30,
+    frame_stack: int = 4,
 ):
     """把智能体的行为录制成 mp4 视频。"""
     import cv2
 
     os.makedirs(output_dir, exist_ok=True)
+    input_channels = infer_input_channels(model_path, frame_stack)
 
     env = make_env(
         env_name,
         render_mode="rgb_array",
+        frame_stack=input_channels,
         clip_reward=False,
         terminal_on_life_loss=False,
     )
 
-    agent = DQNAgent(num_actions=env.action_space.n, device="cpu")
+    agent = DQNAgent(
+        num_actions=env.action_space.n,
+        input_channels=input_channels,
+        device="cpu",
+    )
 
     if model_path:
         agent.load(model_path)
@@ -153,6 +187,7 @@ def main():
             model_path=model_path,
             num_episodes=config.eval_episodes,
             output_dir=config.video_dir,
+            frame_stack=config.frame_stack,
         )
     else:
         play(
@@ -160,6 +195,7 @@ def main():
             model_path=model_path,
             num_episodes=config.eval_episodes,
             render=config.render,
+            frame_stack=config.frame_stack,
         )
 
 

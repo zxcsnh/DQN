@@ -70,6 +70,24 @@ def train(config: DQNConfig) -> dict[str, Any]:
     stop_training = False
     last_episode_reward = 0.0
     last_avg_loss = 0.0
+    next_eval_step = (
+        config.eval_interval_steps if config.eval_interval_steps > 0 else None
+    )
+
+    def run_evaluation(step: int):
+        eval_reward = evaluate(
+            agent,
+            config,
+            num_eval=config.eval_episodes,
+        )
+        logger.log_evaluation(step, eval_reward)
+        print(f"Evaluation reward @ step {step}: {eval_reward:.2f}")
+
+        # 最优模型以评估回报为准，而不是训练期回报。
+        if eval_reward > stats.best_eval_reward:
+            stats.best_eval_reward = eval_reward
+            best_path = os.path.join(config.save_dir, f"{model_prefix}_best.pth")
+            agent.save(best_path, save_replay_buffer=config.save_replay_buffer)
 
     for episode in range(1, config.num_episodes + 1):
         # 只在第一次 reset 时显式传 seed，后续让环境自然推进随机序列。
@@ -109,8 +127,14 @@ def train(config: DQNConfig) -> dict[str, Any]:
             state = next_state
             episode_reward += reward
             episode_length += 1
+            current_step = stats.total_steps + episode_length
 
-            if stats.total_steps + episode_length >= config.max_steps:
+            if next_eval_step is not None:
+                while current_step >= next_eval_step:
+                    run_evaluation(next_eval_step)
+                    next_eval_step += config.eval_interval_steps
+
+            if current_step >= config.max_steps:
                 stop_training = True
                 break
 
@@ -145,26 +169,20 @@ def train(config: DQNConfig) -> dict[str, Any]:
             )
             agent.save(checkpoint_path, save_replay_buffer=config.save_replay_buffer)
 
-        if episode % config.eval_freq == 0:
-            eval_seed_base = config.seed + stats.total_steps
-            eval_reward = evaluate(
-                agent,
-                config,
-                num_eval=config.eval_episodes,
-                seed_base=eval_seed_base,
-            )
-            logger.log_evaluation(stats.total_steps, eval_reward)
-            print(f"Evaluation reward: {eval_reward:.2f}")
-
-            # 最优模型以评估回报为准，而不是训练期回报。
-            if eval_reward > stats.best_eval_reward:
-                stats.best_eval_reward = eval_reward
-                best_path = os.path.join(config.save_dir, f"{model_prefix}_best.pth")
-                agent.save(best_path, save_replay_buffer=config.save_replay_buffer)
+        if next_eval_step is None and episode % config.eval_freq == 0:
+            run_evaluation(stats.total_steps)
 
         if stop_training:
             print(f"Reached max training steps: {config.max_steps}")
             break
+
+    # 兜底最终评估：避免短训练时无评估记录，确保 summary 可用。
+    if config.eval_episodes > 0:
+        needs_final_eval = (
+            len(logger.eval_steps) == 0 or logger.eval_steps[-1] < stats.total_steps
+        )
+        if needs_final_eval:
+            run_evaluation(stats.total_steps)
 
     final_path = os.path.join(config.save_dir, f"{model_prefix}_final.pth")
     agent.save(final_path, save_replay_buffer=config.save_replay_buffer)
@@ -205,9 +223,11 @@ def evaluate(
     agent: DQNAgent,
     config: DQNConfig,
     num_eval: int = 10,
-    seed_base: int | None = None,
 ) -> float:
     """用贪心策略评估模型，并返回平均回报。"""
+    if num_eval <= 0:
+        raise ValueError("num_eval must be a positive integer.")
+
     eval_env = make_env(
         config.env_name,
         frame_size=config.frame_size,
@@ -223,10 +243,8 @@ def evaluate(
     total_rewards = []
 
     for eval_idx in range(num_eval):
-        if seed_base is None:
-            state, _ = eval_env.reset()
-        else:
-            state, _ = eval_env.reset(seed=seed_base + eval_idx)
+        eval_seed = config.seed + config.eval_seed_offset + eval_idx
+        state, _ = eval_env.reset(seed=eval_seed)
         episode_reward = 0.0
         done = False
 

@@ -1,0 +1,18 @@
+{
+  "env_name": "ALE/Pong-v5",
+  "seed": 42,
+  "use_per": true,
+  "total_steps": 120,
+  "episodes_completed": 1,
+  "best_eval_reward": -21.0,
+  "final_train_reward": -2.0,
+  "final_avg_reward_100": -2.0,
+  "final_loss": 0.007853617053476791,
+  "eval_steps": [
+    120
+  ],
+  "eval_rewards": [
+    -21.0
+  ],
+  "checkpoint_prefix": "ALE_Pong-v5"
+}

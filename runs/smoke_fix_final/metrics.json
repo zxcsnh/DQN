@@ -1,0 +1,23 @@
+{
+  "episode_rewards": [
+    -1.0
+  ],
+  "episode_lengths": [
+    90
+  ],
+  "episode_losses": [
+    0.004733908986281676
+  ],
+  "epsilons": [
+    0.9999108999999999
+  ],
+  "avg_rewards": [
+    -1.0
+  ],
+  "eval_steps": [
+    90
+  ],
+  "eval_rewards": [
+    -21.0
+  ]
+}
