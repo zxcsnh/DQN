@@ -1,4 +1,4 @@
-﻿"""DQN agent implementation."""
+"""DQN 智能体实现。"""
 
 import os
 from typing import Dict, Optional, Tuple
@@ -64,13 +64,14 @@ class DQNAgent:
         else:
             self.memory = ReplayBuffer(buffer_size)
 
-        # optimization steps for target-network schedule
+        # steps_done 用于 target network 更新调度。
         self.steps_done = 0
-        # environment interaction steps for epsilon schedule
+        # env_steps_done 用于 epsilon 衰减调度。
         self.env_steps_done = 0
         self.episodes_done = 0
 
     def select_action(self, state: np.ndarray, evaluate: bool = False) -> int:
+        # 训练时走 epsilon-greedy，评估时始终使用贪心动作。
         if not evaluate and np.random.random() < self.epsilon:
             return np.random.randint(self.num_actions)
 
@@ -82,7 +83,7 @@ class DQNAgent:
             return q_values.argmax(dim=1).item()
 
     def on_env_step(self):
-        """Track one environment interaction step and update epsilon."""
+        """记录一次环境交互，并同步更新 epsilon。"""
         self.env_steps_done += 1
         self.update_epsilon()
 
@@ -110,6 +111,7 @@ class DQNAgent:
 
         with torch.no_grad():
             next_q = self.target_net(next_states).max(dim=1)[0]
+            # 只有真正 terminated 时才截断 bootstrap，truncated 不在这里清零。
             target_q = rewards + (1 - terminated) * self.gamma * next_q
 
         td_errors = target_q - current_q
@@ -145,6 +147,7 @@ class DQNAgent:
 
         loss_info = self.compute_loss(batch)
         if self.use_per:
+            # PER 需要用重要性采样权重修正 loss。
             loss = (loss_info["per_sample_loss"] * weights).mean()
         else:
             loss = loss_info["loss"]
@@ -177,6 +180,7 @@ class DQNAgent:
         print(f"Target network updated at optimization step {self.steps_done}")
 
     def soft_update_target_network(self):
+        # 软更新每一步都进行少量参数混合，常见于更平滑的训练设定。
         for target_param, policy_param in zip(
             self.target_net.parameters(), self.policy_net.parameters()
         ):
@@ -199,10 +203,7 @@ class DQNAgent:
         if save_replay_buffer:
             checkpoint["memory_state"] = self.memory.state_dict()
 
-        torch.save(
-            checkpoint,
-            path,
-        )
+        torch.save(checkpoint, path)
         print(f"Model saved to {path}")
 
     def load(self, path: str):
@@ -248,7 +249,7 @@ if __name__ == "__main__":
     print(f"Selected action: {action}")
 
     dummy_next_state = np.random.randint(0, 255, (4, 84, 84), dtype=np.uint8)
-    agent.store_transition(dummy_state, action, 1.0, dummy_next_state, False)
+    agent.store_transition(dummy_state, action, 1.0, dummy_next_state, False, False)
 
     print(f"Buffer size: {len(agent.memory)}")
     print(f"Epsilon: {agent.epsilon}")

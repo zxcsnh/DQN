@@ -1,4 +1,4 @@
-﻿"""Training and visualization utilities."""
+"""训练日志、可视化与随机种子工具。"""
 
 import json
 import os
@@ -9,7 +9,7 @@ import numpy as np
 
 
 class TrainingLogger:
-    """Track metrics during training and save offline artifacts."""
+    """记录训练过程中常用的标量指标。"""
 
     def __init__(self, log_dir: str = "runs"):
         self.log_dir = log_dir
@@ -24,6 +24,7 @@ class TrainingLogger:
         self.eval_rewards: List[float] = []
         self.eval_steps: List[int] = []
 
+        # 先按 step 暂存 loss，等 episode 结束后再聚合成单个值。
         self.current_episode_loss: List[float] = []
 
     def log_step(self, step: int, epsilon: float, loss: Optional[float] = None):
@@ -41,6 +42,7 @@ class TrainingLogger:
         self.episode_losses.append(float(avg_loss))
         self.current_episode_loss = []
 
+        # 使用最近 100 个 episode 的均值作为平滑指标。
         avg_reward = float(np.mean(self.episode_rewards[-100:]))
         self.avg_rewards.append(avg_reward)
 
@@ -138,6 +140,7 @@ def print_episode_stats(
 
 
 def set_seed(seed: int):
+    """尽量固定 Python、NumPy 与 PyTorch 的随机性。"""
     import random
 
     import torch

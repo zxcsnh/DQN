@@ -1,4 +1,4 @@
-"""Convolutional Q-network used by DQN."""
+"""DQN 使用的卷积 Q 网络。"""
 
 import torch
 import torch.nn as nn
@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 
 class DQNCNN(nn.Module):
-    """Nature DQN convolutional backbone for Atari observations."""
+    """适用于 Atari 图像输入的 Nature DQN 卷积网络。"""
 
     def __init__(self, input_channels: int = 4, num_actions: int = 6):
         super().__init__()
@@ -15,26 +15,28 @@ class DQNCNN(nn.Module):
         self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
         self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
 
-        # For 84x84 input: 84 -> 20 -> 9 -> 7
+        # 以 84x84 输入为例，卷积输出会变成 64x7x7。
         self.conv_output_size = 64 * 7 * 7
 
         self.fc1 = nn.Linear(self.conv_output_size, 512)
         self.fc2 = nn.Linear(512, num_actions)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # 原始像素范围是 [0, 255]，这里统一缩放到 [0, 1]。
         x = x.float() / 255.0
 
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
 
+        # 卷积特征展平后送入全连接层，输出每个动作的 Q 值。
         x = x.view(x.size(0), -1)
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
         return x
 
     def get_q_values(self, state: torch.Tensor) -> torch.Tensor:
-        """Alias kept for readability at call sites."""
+        """保留一个语义更直观的别名，便于阅读调用代码。"""
         return self.forward(state)
 
 

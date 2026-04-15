@@ -1,6 +1,9 @@
-﻿import json
+"""单次 DQN 训练入口。"""
+
+import json
 import os
 from dataclasses import asdict
+from typing import Any
 
 import numpy as np
 
@@ -10,7 +13,8 @@ from dqn.env import make_env
 from dqn.utils import TrainingLogger, print_episode_stats, set_seed
 
 
-def train(config: DQNConfig):
+def train(config: DQNConfig) -> dict[str, Any]:
+    """训练一个 DQN 智能体，并保存本次运行的全部产物。"""
     set_seed(config.seed)
     model_prefix = config.model_name_prefix()
 
@@ -53,7 +57,6 @@ def train(config: DQNConfig):
     )
 
     logger = TrainingLogger(config.log_dir)
-
     stats = TrainingStats()
 
     os.makedirs(config.save_dir, exist_ok=True)
@@ -65,10 +68,14 @@ def train(config: DQNConfig):
     print("-" * 80)
 
     stop_training = False
+    last_episode_reward = 0.0
+    last_avg_loss = 0.0
+
     for episode in range(1, config.num_episodes + 1):
+        # 只在第一次 reset 时显式传 seed，后续让环境自然推进随机序列。
         reset_seed = config.seed if episode == 1 else None
         state, _ = env.reset(seed=reset_seed)
-        episode_reward = 0
+        episode_reward = 0.0
         episode_loss = []
         episode_length = 0
 
@@ -107,7 +114,7 @@ def train(config: DQNConfig):
                 stop_training = True
                 break
 
-        avg_loss = np.mean(episode_loss) if episode_loss else 0.0
+        avg_loss = float(np.mean(episode_loss)) if episode_loss else 0.0
         logger.log_episode(episode, episode_reward, episode_length, agent.epsilon)
 
         stats.episode = episode
@@ -118,6 +125,9 @@ def train(config: DQNConfig):
         stats.loss = avg_loss
         stats.avg_reward_100 = logger.avg_rewards[-1]
         agent.episodes_done = episode
+
+        last_episode_reward = episode_reward
+        last_avg_loss = avg_loss
 
         print_episode_stats(
             episode,
@@ -146,6 +156,7 @@ def train(config: DQNConfig):
             logger.log_evaluation(stats.total_steps, eval_reward)
             print(f"Evaluation reward: {eval_reward:.2f}")
 
+            # 最优模型以评估回报为准，而不是训练期回报。
             if eval_reward > stats.best_eval_reward:
                 stats.best_eval_reward = eval_reward
                 best_path = os.path.join(config.save_dir, f"{model_prefix}_best.pth")
@@ -164,10 +175,30 @@ def train(config: DQNConfig):
     logger.close()
     env.close()
 
+    summary: dict[str, Any] = {
+        "env_name": config.env_name,
+        "seed": config.seed,
+        "use_per": config.use_per,
+        "total_steps": stats.total_steps,
+        "episodes_completed": stats.episode,
+        "best_eval_reward": stats.best_eval_reward,
+        "final_train_reward": last_episode_reward,
+        "final_avg_reward_100": stats.avg_reward_100,
+        "final_loss": last_avg_loss,
+        "eval_steps": logger.eval_steps,
+        "eval_rewards": logger.eval_rewards,
+        "checkpoint_prefix": model_prefix,
+    }
+    with open(
+        os.path.join(config.log_dir, "run_summary.json"), "w", encoding="utf-8"
+    ) as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+
     print("-" * 80)
     print("Training finished!")
     print(f"Best evaluation reward: {stats.best_eval_reward:.2f}")
     print(f"Model saved to: {config.save_dir}")
+    return summary
 
 
 def evaluate(
@@ -176,6 +207,7 @@ def evaluate(
     num_eval: int = 10,
     seed_base: int | None = None,
 ) -> float:
+    """用贪心策略评估模型，并返回平均回报。"""
     eval_env = make_env(
         config.env_name,
         frame_size=config.frame_size,
@@ -195,7 +227,7 @@ def evaluate(
             state, _ = eval_env.reset()
         else:
             state, _ = eval_env.reset(seed=seed_base + eval_idx)
-        episode_reward = 0
+        episode_reward = 0.0
         done = False
 
         while not done:

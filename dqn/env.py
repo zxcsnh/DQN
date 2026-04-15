@@ -1,4 +1,4 @@
-"""Environment helpers for Atari DQN."""
+"""Atari 环境构造与预处理工具。"""
 
 from typing import Optional
 
@@ -18,7 +18,7 @@ def make_env(
     seed: Optional[int] = None,
     terminal_on_life_loss: bool = False,
 ) -> gym.Env:
-    """Create an Atari environment with standard preprocessing."""
+    """创建带标准 Atari 预处理的环境。"""
     if frame_size[0] != frame_size[1]:
         raise ValueError(
             "Gymnasium AtariPreprocessing only supports square screen_size values."
@@ -26,7 +26,7 @@ def make_env(
 
     gym.register_envs(ale_py)
 
-    # Disable ALE's internal frame skip so preprocessing owns the behavior.
+    # 关闭 ALE 自带的 frameskip，避免与 wrapper 的跳帧逻辑重复。
     env = gym.make(env_name, render_mode=render_mode, frameskip=1)
 
     env = gym.wrappers.AtariPreprocessing(
@@ -38,9 +38,11 @@ def make_env(
         scale_obs=False,
         terminal_on_life_loss=terminal_on_life_loss,
     )
+    # 将连续多帧叠起来，让网络感知运动信息。
     env = gym.wrappers.FrameStackObservation(env, frame_stack)
 
     if clip_reward:
+        # 奖励裁剪是经典 DQN 在 Atari 上常见的稳定化技巧。
         env = gym.wrappers.TransformReward(
             env, lambda reward: float(np.clip(reward, -1.0, 1.0))
         )

@@ -1,22 +1,23 @@
-# DQN - Deep Q-Network for Atari Games
+# Atari 上的 DQN 与 PER-DQN 对比项目
 
-A PyTorch implementation of Deep Q-Network (DQN) for Atari games, with replay buffer, target network, Atari preprocessing, evaluation, and gameplay recording.
+这是一个基于 PyTorch 的 Atari DQN 项目，支持普通 DQN 与优先经验回放 DQN 的训练、评估、批量对比实验和结果汇总，适合做课程实验或论文实验。
 
-## Features
+## 功能简介
 
-- **Core DQN Algorithm**: Experience replay, target network, epsilon-greedy exploration
-- **Atari Preprocessing**: Frame stacking, reward clipping, frame skipping
-- **Training Visualization**: Offline metrics export and matplotlib plotting
-- **Model Management**: Save/load trained models
-- **Gameplay Demo**: Play games with trained agents
+- 普通 DQN：包含经验回放、目标网络、epsilon-greedy 探索
+- PER-DQN：支持优先经验回放与重要性采样权重
+- Atari 预处理：帧堆叠、跳帧、奖励裁剪、可选生命丢失终止
+- 单次训练与模型回放
+- 多环境、多随机种子的批量实验
+- 自动汇总结果，生成 CSV、JSON、Markdown 和对比图
 
-## Installation
+## 安装方式
 
 ```bash
 uv sync
 ```
 
-or
+或者：
 
 ```bash
 python -m venv .venv
@@ -24,141 +25,119 @@ python -m venv .venv
 pip install -e .
 ```
 
-## Quick Start
+## 基本使用
 
-### Train a DQN Agent
+### 1. 单次训练
+
+直接运行：
 
 ```bash
-# Edit hyperparameters in config.py, then start training
 python train.py
 ```
 
-Typical fields to tune in [config.py](/e:/Programming_Language/MachineLearning/RL/DQN/config.py:8):
-- `env_name`
-- `num_episodes`
-- `max_steps`
-- `learning_rate`
-- `batch_size`
-- `use_per`
-- `soft_update`
-- `tau`
+训练参数在 [config.py](/e:/Programming_Language/MachineLearning/RL/DQN/config.py:1) 中修改。
 
-### Play with Trained Agent
+### 2. 模型演示或录制视频
 
 ```bash
-# Edit inference options in config.py, then run evaluation/playback
 python play.py
 ```
 
-Playback-related fields in [config.py](/e:/Programming_Language/MachineLearning/RL/DQN/config.py:8):
-- `render`
-- `save_video`
-- `video_dir`
+是否渲染、是否录制视频等设置，也在 [config.py](/e:/Programming_Language/MachineLearning/RL/DQN/config.py:1) 中修改。
+
+### 3. 运行论文对比实验
+
+直接打开 [experiment.py](/e:/Programming_Language/MachineLearning/RL/DQN/experiment.py:1)，修改 `ExperimentSettings` 中的固定配置，例如：
+
+- `envs`
+- `seeds`
+- `variants`
+- `max_steps`
+- `eval_freq`
 - `eval_episodes`
 
-### Training Outputs
+然后运行：
 
-After training finishes, offline artifacts are written to `runs/`:
-- `config.json`
-- `metrics.json`
-- `training_curves.png`
-
-## Project Structure
-
-```
-DQN/
-├── dqn/
-│   ├── __init__.py          # Package initialization
-│   ├── agent.py             # DQN agent implementation
-│   ├── env.py               # Atari environment preprocessing
-│   ├── network.py           # CNN network architecture
-│   ├── replay_buffer.py     # Replay buffer and PER
-│   └── utils.py             # Training utilities and logging
-├── config.py                 # Hyperparameters configuration
-├── train.py                  # Training script
-├── play.py                   # Gameplay demonstration
-├── pyproject.toml            # Project dependencies
-└── README.md                 # Documentation
+```bash
+python experiment.py
 ```
 
-## Hyperparameters
+默认会在 `experiments/` 下生成类似这样的目录结构：
 
-Default hyperparameters (tuned for Pong):
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `learning_rate` | 2.5e-4 | Adam optimizer learning rate |
-| `gamma` | 0.99 | Discount factor |
-| `batch_size` | 32 | Training batch size |
-| `buffer_size` | 100,000 | Replay buffer capacity |
-| `epsilon_start` | 1.0 | Initial exploration rate |
-| `epsilon_end` | 0.01 | Final exploration rate |
-| `epsilon_decay` | 1,000,000 | Steps to decay epsilon |
-| `target_update_freq` | 10,000 | Steps between target network updates |
-| `frame_stack` | 4 | Number of frames to stack |
-| `frame_skip` | 4 | Frame skip count |
-| `eval_episodes` | 10 | Evaluation episodes per eval run |
-| `use_per` | False | Enable prioritized replay |
-
-## Network Architecture
-
-```
-Input: (batch, 4, 84, 84) - 4 stacked grayscale frames
-
-Conv2d(4, 32, 8, stride=4) -> ReLU -> (batch, 32, 20, 20)
-Conv2d(32, 64, 4, stride=2) -> ReLU -> (batch, 64, 9, 9)
-Conv2d(64, 64, 3, stride=1) -> ReLU -> (batch, 64, 7, 7)
-
-Flatten -> (batch, 3136)
-Linear(3136, 512) -> ReLU
-Linear(512, num_actions)
-
-Output: Q-values for each action
+```text
+experiments/
+  experiment_manifest.json
+  ALE_Pong-v5/
+    dqn/
+      seed_42/
+        logs/
+        models/
+    per_dqn/
+      seed_42/
+        logs/
+        models/
 ```
 
-## Training Tips
+### 4. 汇总实验结果
 
-1. Warm-up: the agent waits for `min_buffer_size` transitions before learning starts.
-2. Reproducibility: training saves the resolved config to `runs/config.json`.
-3. Offline analysis: training also saves `runs/metrics.json` and `runs/training_curves.png`.
-4. Evaluation: eval episodes use unclipped rewards and deterministic action selection.
-5. GPU: training is much faster with CUDA-enabled GPU.
+直接打开 [summarize_experiments.py](/e:/Programming_Language/MachineLearning/RL/DQN/summarize_experiments.py:1)，修改 `SummarySettings` 中的固定配置：
 
-## Supported Games
+- `manifest_path`
+- `output_dir`
 
-Tested configuration target:
-- `ALE/Pong-v5`
+然后运行：
 
-Should work on most Atari games from the ALE suite.
+```bash
+python summarize_experiments.py
+```
 
-## Algorithm Details
+汇总结果会输出到 `summary/` 目录，包含：
 
-### Experience Replay
-- Stores transitions (state, action, reward, next_state, done)
-- Random sampling breaks correlation between consecutive samples
-- Improves sample efficiency
+- `aggregate_results.csv`
+- `aggregate_results.json`
+- `aggregate_results.md`
+- 每个环境一张对比曲线图
 
-### Target Network
-- Separate network for computing target Q-values
-- Supports hard update or Polyak soft update
-- Stabilizes training
+## 论文实验推荐流程
 
-### Epsilon-Greedy Exploration
-- Linear decay from 1.0 to 0.01 over 1M steps
-- Balances exploration and exploitation
+1. 在 `experiment.py` 中设置 2 到 4 个 Atari 环境。
+2. 为每种方法设置 3 到 5 个随机种子。
+3. 保持 DQN 和 PER-DQN 除 `use_per` 外的其他超参数一致。
+4. 跑完实验后执行 `summarize_experiments.py`。
+5. 在论文中报告均值、标准差和对比图。
 
-### Atari Preprocessing
-- **Frame Skip**: Repeat action for 4 frames
-- **Max Pooling**: Max over the last two raw frames during frame skip
-- **Frame Stack**: Stack 4 consecutive frames
-- **Reward Clipping**: Clip rewards to [-1, 1]
-- **No-op Starts**: Random no-op actions at episode start
+## 主要文件说明
 
-## License
+- [train.py](/e:/Programming_Language/MachineLearning/RL/DQN/train.py:1)：单次训练入口
+- [play.py](/e:/Programming_Language/MachineLearning/RL/DQN/play.py:1)：模型演示与视频录制
+- [experiment.py](/e:/Programming_Language/MachineLearning/RL/DQN/experiment.py:1)：批量实验入口
+- [summarize_experiments.py](/e:/Programming_Language/MachineLearning/RL/DQN/summarize_experiments.py:1)：结果汇总与绘图
+- [config.py](/e:/Programming_Language/MachineLearning/RL/DQN/config.py:1)：训练基础配置
+- [dqn/agent.py](/e:/Programming_Language/MachineLearning/RL/DQN/dqn/agent.py:1)：DQN 与 PER 训练逻辑
+- [dqn/replay_buffer.py](/e:/Programming_Language/MachineLearning/RL/DQN/dqn/replay_buffer.py:1)：普通经验回放与优先经验回放
+- [dqn/env.py](/e:/Programming_Language/MachineLearning/RL/DQN/dqn/env.py:1)：Atari 环境预处理
 
-MIT License
+## 训练产物说明
 
-## References
+每次运行会在对应 `logs/` 目录下保存：
 
-- [Human-level control through deep reinforcement learning](https://www.nature.com/articles/nature14236) - Mnih et al., 2015
-- [Playing Atari with Deep Reinforcement Learning](https://arxiv.org/abs/1312.5602) - Mnih et al., 2013
+- `config.json`：本次运行实际使用的配置
+- `metrics.json`：训练过程中的回报、损失与评估曲线
+- `run_summary.json`：供批量统计使用的摘要结果
+- `training_curves.png`：单次训练曲线图
+
+模型文件保存在对应的 `models/` 目录下。
+
+## 写论文时建议使用的指标
+
+- `best_eval_reward`
+- `final_avg_reward_100`
+- 多随机种子的均值与标准差
+- 不同环境下的收敛曲线
+
+建议以评估回报作为主要比较指标，不要直接用训练时的原始 reward 作为最终结论。
+
+## 参考文献
+
+- Mnih et al., 2015. Human-level control through deep reinforcement learning.
+- Schaul et al., 2016. Prioritized Experience Replay.

@@ -1,4 +1,4 @@
-"""Run a trained DQN agent in an Atari environment."""
+"""使用训练好的模型进行演示或录制视频。"""
 
 import os
 import time
@@ -18,7 +18,7 @@ def play(
     delay: float = 0.02,
     device: str = "auto",
 ):
-    """Play Atari episodes with a trained agent."""
+    """运行若干回合，用于观察训练后策略的表现。"""
     render_mode = "human" if render else None
     env = make_env(
         env_name,
@@ -89,7 +89,7 @@ def record_video(
     output_dir: str = "videos",
     fps: int = 30,
 ):
-    """Record Atari gameplay videos."""
+    """把智能体的行为录制成 mp4 视频。"""
     import cv2
 
     os.makedirs(output_dir, exist_ok=True)

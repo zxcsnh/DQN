@@ -1,4 +1,4 @@
-﻿"""Replay buffer implementations for DQN and PER."""
+"""DQN 与 PER 使用的经验回放缓冲区实现。"""
 
 import random
 from typing import Any, Dict, Optional, Tuple
@@ -7,7 +7,7 @@ import numpy as np
 
 
 def _upgrade_transition(transition):
-    """Upgrade legacy (s, a, r, s', done) tuples to the new format."""
+    """兼容旧 checkpoint 中的五元组 transition 格式。"""
     if transition is None or len(transition) == 6:
         return transition
     if len(transition) == 5:
@@ -17,7 +17,7 @@ def _upgrade_transition(transition):
 
 
 class ReplayBuffer:
-    """Uniform replay buffer."""
+    """普通均匀采样经验回放。"""
 
     def __init__(self, capacity: int = 100000, seed: Optional[int] = None):
         self.capacity = capacity
@@ -42,6 +42,7 @@ class ReplayBuffer:
         if len(self.buffer) < self.capacity:
             self.buffer.append(transition)
         else:
+            # 环形覆盖，保证缓冲区大小固定。
             self.buffer[self.position] = transition
 
         self.position = (self.position + 1) % self.capacity
@@ -65,7 +66,7 @@ class ReplayBuffer:
         return len(self.buffer) >= min_size
 
     def state_dict(self) -> Dict[str, Any]:
-        """Return full replay buffer state for checkpoint resume."""
+        """保存完整缓冲区状态，便于中断后继续训练。"""
         return {
             "capacity": self.capacity,
             "buffer": self.buffer,
@@ -73,14 +74,14 @@ class ReplayBuffer:
         }
 
     def load_state_dict(self, state: Dict[str, Any]):
-        """Restore replay buffer state from checkpoint."""
+        """从 checkpoint 中恢复缓冲区状态。"""
         self.capacity = state["capacity"]
         self.buffer = [_upgrade_transition(transition) for transition in state["buffer"]]
         self.position = state["position"]
 
 
 class PrioritizedReplayBuffer:
-    """Prioritized replay buffer (proportional variant)."""
+    """按 TD 误差优先级采样的经验回放。"""
 
     def __init__(
         self,
@@ -113,7 +114,7 @@ class PrioritizedReplayBuffer:
         terminated: bool,
         truncated: bool,
     ):
-        # priorities are stored as p^alpha already
+        # 新样本通常用当前最大优先级初始化，确保能尽快被采到。
         max_priority = self.priorities[: self.size].max() if self.size > 0 else 1.0
 
         self.buffer[self.position] = (
@@ -132,6 +133,7 @@ class PrioritizedReplayBuffer:
     def sample(self, batch_size: int) -> Tuple:
         self.frame += 1
 
+        # beta 逐步增大到 1，用来逐渐加强重要性采样纠偏。
         beta = min(
             1.0,
             self.beta_start + (1.0 - self.beta_start) * self.frame / self.beta_frames,
@@ -153,6 +155,7 @@ class PrioritizedReplayBuffer:
         terminated = np.array([s[4] for s in samples], dtype=np.float32)
         truncated = np.array([s[5] for s in samples], dtype=np.float32)
 
+        # 重要性采样权重用于减轻非均匀采样带来的估计偏差。
         weights = (self.size * probs[indices]) ** (-beta)
         weights = weights / weights.max()
 
@@ -177,7 +180,7 @@ class PrioritizedReplayBuffer:
         return self.size >= min_size
 
     def state_dict(self) -> Dict[str, Any]:
-        """Return full PER state for checkpoint resume."""
+        """保存 PER 自身的优先级与采样进度。"""
         return {
             "capacity": self.capacity,
             "alpha": self.alpha,
@@ -191,7 +194,7 @@ class PrioritizedReplayBuffer:
         }
 
     def load_state_dict(self, state: Dict[str, Any]):
-        """Restore PER state from checkpoint."""
+        """从 checkpoint 中恢复 PER 状态。"""
         self.capacity = state["capacity"]
         self.alpha = state["alpha"]
         self.beta_start = state["beta_start"]
