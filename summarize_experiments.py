@@ -26,15 +26,20 @@ def load_json(path: str) -> dict:
 def summarize_group(runs: list[dict]) -> dict:
     """对同一环境、同一方法的多 seed 结果做统计。"""
     best_eval_rewards = [run["summary"]["best_eval_reward"] for run in runs]
-    final_avg_rewards = [run["summary"]["final_avg_reward_100"] for run in runs]
+    final_eval_rewards = [_get_final_eval_reward(run["summary"]) for run in runs]
+    final_train_avg_rewards = [
+        _get_final_train_avg_reward(run["summary"]) for run in runs
+    ]
     total_steps = [run["summary"]["total_steps"] for run in runs]
 
     return {
         "num_runs": len(runs),
         "best_eval_reward_mean": float(np.mean(best_eval_rewards)),
         "best_eval_reward_std": float(np.std(best_eval_rewards)),
-        "final_avg_reward_100_mean": float(np.mean(final_avg_rewards)),
-        "final_avg_reward_100_std": float(np.std(final_avg_rewards)),
+        "final_eval_reward_mean": float(np.mean(final_eval_rewards)),
+        "final_eval_reward_std": float(np.std(final_eval_rewards)),
+        "final_train_avg_reward_100_mean": float(np.mean(final_train_avg_rewards)),
+        "final_train_avg_reward_100_std": float(np.std(final_train_avg_rewards)),
         "total_steps_mean": float(np.mean(total_steps)),
         "total_steps_std": float(np.std(total_steps)),
     }
@@ -106,8 +111,9 @@ def save_markdown_table(path: str, rows: list[dict]):
         "运行次数",
         "最佳评估均值",
         "最佳评估标准差",
-        "最终 Avg100 均值",
-        "最终 Avg100 标准差",
+        "最终评估均值",
+        "最终评估标准差",
+        "训练 Avg100 均值",
     ]
     lines = [
         "| " + " | ".join(headers) + " |",
@@ -124,8 +130,9 @@ def save_markdown_table(path: str, rows: list[dict]):
                     str(row["num_runs"]),
                     f"{row['best_eval_reward_mean']:.3f}",
                     f"{row['best_eval_reward_std']:.3f}",
-                    f"{row['final_avg_reward_100_mean']:.3f}",
-                    f"{row['final_avg_reward_100_std']:.3f}",
+                    f"{row['final_eval_reward_mean']:.3f}",
+                    f"{row['final_eval_reward_std']:.3f}",
+                    f"{row['final_train_avg_reward_100_mean']:.3f}",
                 ]
             )
             + " |"
@@ -169,6 +176,24 @@ def plot_group_curves(groups: dict, output_dir: str):
         plt.close()
 
 
+def _get_final_eval_reward(summary: dict) -> float:
+    final_eval_reward = summary.get("final_eval_reward")
+    if final_eval_reward is not None:
+        return float(final_eval_reward)
+
+    eval_rewards = summary.get("eval_rewards", [])
+    if eval_rewards:
+        return float(eval_rewards[-1])
+
+    return float(summary["best_eval_reward"])
+
+
+def _get_final_train_avg_reward(summary: dict) -> float:
+    if "final_train_avg_reward_100" in summary:
+        return float(summary["final_train_avg_reward_100"])
+    return float(summary.get("final_avg_reward_100", 0.0))
+
+
 def main():
     settings = SummarySettings()
     manifest = load_json(settings.manifest_path)
@@ -206,8 +231,10 @@ def main():
             "num_runs",
             "best_eval_reward_mean",
             "best_eval_reward_std",
-            "final_avg_reward_100_mean",
-            "final_avg_reward_100_std",
+            "final_eval_reward_mean",
+            "final_eval_reward_std",
+            "final_train_avg_reward_100_mean",
+            "final_train_avg_reward_100_std",
             "total_steps_mean",
             "total_steps_std",
         ],

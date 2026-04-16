@@ -1,5 +1,7 @@
 """使用训练好的模型进行演示或录制视频。"""
 
+from __future__ import annotations
+
 import os
 import time
 
@@ -10,23 +12,38 @@ from dqn.agent import DQNAgent
 from dqn.env import make_env
 
 
-def infer_input_channels(model_path: str | None, default_channels: int) -> int:
-    """优先从 checkpoint 推断输入通道数，失败时回退到默认值。"""
+def infer_model_metadata(
+    model_path: str | None,
+    default_channels: int,
+    default_frame_size: tuple[int, int],
+) -> tuple[int, tuple[int, int]]:
+    """优先从 checkpoint 推断输入配置，失败时回退到默认值。"""
     if not model_path or not os.path.exists(model_path):
-        return default_channels
+        return default_channels, default_frame_size
 
     try:
         import torch
 
         checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
+        model_config = checkpoint.get("model_config", {})
+
+        input_channels = int(model_config.get("input_channels", default_channels))
+        input_shape = model_config.get("input_shape", default_frame_size)
+        if isinstance(input_shape, list):
+            input_shape = tuple(input_shape)
+        if not (isinstance(input_shape, tuple) and len(input_shape) == 2):
+            input_shape = default_frame_size
+
         policy_state = checkpoint.get("policy_net", {})
         conv1_weight = policy_state.get("conv1.weight")
         if conv1_weight is not None and conv1_weight.ndim == 4:
-            return int(conv1_weight.shape[1])
-    except Exception as exc:
-        print(f"Warning: failed to infer input channels from checkpoint: {exc}")
+            input_channels = int(conv1_weight.shape[1])
 
-    return default_channels
+        return input_channels, tuple(int(v) for v in input_shape)
+    except Exception as exc:
+        print(f"Warning: failed to infer model metadata from checkpoint: {exc}")
+
+    return default_channels, default_frame_size
 
 
 def play(
@@ -37,14 +54,18 @@ def play(
     delay: float = 0.02,
     device: str = "auto",
     frame_stack: int = 4,
+    frame_size: tuple[int, int] = (84, 84),
 ):
     """运行若干回合，用于观察训练后策略的表现。"""
-    input_channels = infer_input_channels(model_path, frame_stack)
+    input_channels, input_shape = infer_model_metadata(
+        model_path, frame_stack, frame_size
+    )
     render_mode = "human" if render else None
     env = make_env(
         env_name,
         render_mode=render_mode,
         frame_stack=input_channels,
+        frame_size=input_shape,
         clip_reward=False,
         terminal_on_life_loss=False,
     )
@@ -59,10 +80,12 @@ def play(
     print(f"Environment: {env_name}")
     print(f"Num actions: {num_actions}")
     print(f"Input channels: {input_channels}")
+    print(f"Input shape: {input_shape}")
 
     agent = DQNAgent(
         num_actions=num_actions,
         input_channels=input_channels,
+        input_shape=input_shape,
         device=device,
     )
 
@@ -116,17 +139,21 @@ def record_video(
     output_dir: str = "videos",
     fps: int = 30,
     frame_stack: int = 4,
+    frame_size: tuple[int, int] = (84, 84),
 ):
     """把智能体的行为录制成 mp4 视频。"""
     import cv2
 
     os.makedirs(output_dir, exist_ok=True)
-    input_channels = infer_input_channels(model_path, frame_stack)
+    input_channels, input_shape = infer_model_metadata(
+        model_path, frame_stack, frame_size
+    )
 
     env = make_env(
         env_name,
         render_mode="rgb_array",
         frame_stack=input_channels,
+        frame_size=input_shape,
         clip_reward=False,
         terminal_on_life_loss=False,
     )
@@ -134,6 +161,7 @@ def record_video(
     agent = DQNAgent(
         num_actions=env.action_space.n,
         input_channels=input_channels,
+        input_shape=input_shape,
         device="cpu",
     )
 
@@ -188,6 +216,7 @@ def main():
             num_episodes=config.eval_episodes,
             output_dir=config.video_dir,
             frame_stack=config.frame_stack,
+            frame_size=config.frame_size,
         )
     else:
         play(
@@ -196,6 +225,7 @@ def main():
             num_episodes=config.eval_episodes,
             render=config.render,
             frame_stack=config.frame_stack,
+            frame_size=config.frame_size,
         )
 
 

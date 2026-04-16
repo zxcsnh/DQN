@@ -32,6 +32,9 @@ class DQNAgent:
         per_beta_frames: int = 100000,
         soft_update: bool = False,
         tau: float = 0.005,
+        frame_stack: int = 4,
+        input_shape: tuple[int, int] = (84, 84),
+        seed: Optional[int] = None,
     ):
         self.num_actions = num_actions
         self.device = device
@@ -41,14 +44,24 @@ class DQNAgent:
         self.use_per = use_per
         self.soft_update = soft_update
         self.tau = tau
+        self.input_channels = input_channels
+        self.input_shape = input_shape
 
         self.epsilon = epsilon_start
         self.epsilon_start = epsilon_start
         self.epsilon_end = epsilon_end
         self.epsilon_decay = epsilon_decay
 
-        self.policy_net = DQNCNN(input_channels, num_actions).to(device)
-        self.target_net = DQNCNN(input_channels, num_actions).to(device)
+        self.policy_net = DQNCNN(
+            input_channels,
+            num_actions,
+            input_shape=input_shape,
+        ).to(device)
+        self.target_net = DQNCNN(
+            input_channels,
+            num_actions,
+            input_shape=input_shape,
+        ).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
 
@@ -57,12 +70,18 @@ class DQNAgent:
         if use_per:
             self.memory = PrioritizedReplayBuffer(
                 buffer_size,
+                frame_stack=frame_stack,
                 alpha=per_alpha,
                 beta_start=per_beta_start,
                 beta_frames=per_beta_frames,
+                seed=seed,
             )
         else:
-            self.memory = ReplayBuffer(buffer_size)
+            self.memory = ReplayBuffer(
+                buffer_size,
+                frame_stack=frame_stack,
+                seed=seed,
+            )
 
         # steps_done 用于 target network 更新调度。
         self.steps_done = 0
@@ -76,11 +95,15 @@ class DQNAgent:
             return np.random.randint(self.num_actions)
 
         with torch.no_grad():
-            state_tensor = torch.tensor(state, dtype=torch.float32, device=self.device)
+            state_tensor = torch.as_tensor(state, device=self.device)
             if len(state_tensor.shape) == 3:
                 state_tensor = state_tensor.unsqueeze(0)
             q_values = self.policy_net(state_tensor)
             return q_values.argmax(dim=1).item()
+
+    def begin_episode(self, initial_state: np.ndarray) -> None:
+        """通知 replay buffer 一个新的 episode 已开始。"""
+        self.memory.start_episode(initial_state)
 
     def on_env_step(self):
         """记录一次环境交互，并同步更新 epsilon。"""
@@ -101,16 +124,21 @@ class DQNAgent:
     def compute_loss(self, batch: Tuple) -> Dict[str, torch.Tensor]:
         states, actions, rewards, next_states, terminated, _truncated = batch
 
-        states = torch.tensor(states, dtype=torch.float32, device=self.device)
-        actions = torch.tensor(actions, dtype=torch.long, device=self.device)
-        rewards = torch.tensor(rewards, dtype=torch.float32, device=self.device)
-        next_states = torch.tensor(next_states, dtype=torch.float32, device=self.device)
-        terminated = torch.tensor(terminated, dtype=torch.float32, device=self.device)
+        states = torch.as_tensor(states, device=self.device)
+        actions = torch.as_tensor(actions, dtype=torch.long, device=self.device)
+        rewards = torch.as_tensor(rewards, dtype=torch.float32, device=self.device)
+        next_states = torch.as_tensor(next_states, device=self.device)
+        terminated = torch.as_tensor(terminated, dtype=torch.float32, device=self.device)
 
         current_q = self.policy_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
 
         with torch.no_grad():
-            next_q = self.target_net(next_states).max(dim=1)[0]
+            next_actions = self.policy_net(next_states).argmax(dim=1, keepdim=True)
+            next_q = (
+                self.target_net(next_states)
+                .gather(1, next_actions)
+                .squeeze(1)
+            )
             # 只有真正 terminated 时才截断 bootstrap，truncated 不在这里清零。
             target_q = rewards + (1 - terminated) * self.gamma * next_q
 
@@ -141,7 +169,7 @@ class DQNAgent:
                 weights,
             ) = self.memory.sample(self.batch_size)
             batch = (states, actions, rewards, next_states, terminated, truncated)
-            weights = torch.tensor(weights, dtype=torch.float32, device=self.device)
+            weights = torch.as_tensor(weights, dtype=torch.float32, device=self.device)
         else:
             batch = self.memory.sample(self.batch_size)
 
@@ -199,6 +227,11 @@ class DQNAgent:
             "episodes_done": self.episodes_done,
             "epsilon": self.epsilon,
             "use_per": self.use_per,
+            "model_config": {
+                "input_channels": self.input_channels,
+                "input_shape": self.input_shape,
+                "num_actions": self.num_actions,
+            },
         }
         if save_replay_buffer:
             checkpoint["memory_state"] = self.memory.state_dict()
@@ -224,7 +257,10 @@ class DQNAgent:
                 "Replay buffer state was not restored."
             )
         elif "memory_state" in checkpoint:
-            self.memory.load_state_dict(checkpoint["memory_state"])
+            try:
+                self.memory.load_state_dict(checkpoint["memory_state"])
+            except ValueError as exc:
+                print(f"Warning: failed to restore replay buffer state: {exc}")
 
         print(f"Model loaded from {path}")
 

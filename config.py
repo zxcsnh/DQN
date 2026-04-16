@@ -19,8 +19,10 @@ class DQNConfig:
     gamma: float = 0.99
 
     # 经验回放相关配置。
-    buffer_size: int = 100_000
-    min_buffer_size: int = 10_000
+    buffer_size: int = 500_000
+    learning_starts: int = 50_000
+    train_freq: int = 4
+    gradient_steps: int = 1
     use_per: bool = False
     per_alpha: float = 0.6
     per_beta_start: float = 0.4
@@ -41,6 +43,8 @@ class DQNConfig:
     save_freq: int = 100
     log_dir: str = "runs"
     save_replay_buffer: bool = False
+    resume_path: str | None = None
+    save_latest_checkpoint_on_error: bool = True
 
     # 评估配置。
     # 推荐按环境步数触发评估，便于不同 run 在相同训练进度下比较。
@@ -79,7 +83,6 @@ class DQNConfig:
         """把环境名转成适合保存到文件系统中的前缀。"""
         return self.env_name.replace("/", "_").replace(":", "_")
 
-
 @dataclass
 class TrainingStats:
     """记录训练过程中的高层统计信息。"""
@@ -92,11 +95,6 @@ class TrainingStats:
     loss: float = 0.0
     avg_reward_100: float = 0.0
     best_eval_reward: float = -float("inf")
-
-    def reset_episode(self):
-        """重置按 episode 统计的字段。"""
-        self.episode_reward = 0.0
-        self.episode_length = 0
 
 
 DEFAULT_CONFIG = DQNConfig()

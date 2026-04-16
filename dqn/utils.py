@@ -23,12 +23,18 @@ class TrainingLogger:
         self.avg_rewards: List[float] = []
         self.eval_rewards: List[float] = []
         self.eval_steps: List[int] = []
+        self.global_steps: List[int] = []
+        self.step_losses: List[float] = []
+        self.step_epsilons: List[float] = []
 
         # 先按 step 暂存 loss，等 episode 结束后再聚合成单个值。
         self.current_episode_loss: List[float] = []
 
     def log_step(self, step: int, epsilon: float, loss: Optional[float] = None):
         if loss is not None:
+            self.global_steps.append(int(step))
+            self.step_epsilons.append(float(epsilon))
+            self.step_losses.append(float(loss))
             self.current_episode_loss.append(loss)
 
     def log_episode(self, episode: int, reward: float, length: int, epsilon: float):
@@ -100,6 +106,9 @@ class TrainingLogger:
             "avg_rewards": self.avg_rewards,
             "eval_steps": self.eval_steps,
             "eval_rewards": self.eval_rewards,
+            "global_steps": self.global_steps,
+            "step_losses": self.step_losses,
+            "step_epsilons": self.step_epsilons,
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(metrics, f, indent=2)
@@ -114,6 +123,9 @@ class TrainingLogger:
         self.avg_rewards = metrics["avg_rewards"]
         self.eval_steps = metrics.get("eval_steps", [])
         self.eval_rewards = metrics.get("eval_rewards", [])
+        self.global_steps = metrics.get("global_steps", [])
+        self.step_losses = metrics.get("step_losses", [])
+        self.step_epsilons = metrics.get("step_epsilons", [])
 
     def close(self):
         pass

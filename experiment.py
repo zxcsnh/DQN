@@ -1,8 +1,10 @@
 """批量运行 DQN 与 PER-DQN 对比实验。"""
 
+from __future__ import annotations
+
 import json
 import os
-from dataclasses import asdict, dataclass, field, fields, replace
+from dataclasses import asdict, dataclass, field, replace
 from itertools import product
 
 from config import DQNConfig
@@ -16,9 +18,10 @@ VARIANT_LABELS = {
 
 
 @dataclass
-class ExperimentSettings(DQNConfig):
-    """在单次训练配置基础上补充批量实验所需设置。"""
+class ExperimentSettings:
+    """批量实验调度配置，与单次训练配置解耦。"""
 
+    base_config: DQNConfig = field(default_factory=DQNConfig)
     envs: list[str] = field(default_factory=lambda: ["ALE/Pong-v5"])
     seeds: list[int] = field(default_factory=lambda: [42])
     variants: list[str] = field(default_factory=lambda: ["dqn", "per"])
@@ -31,12 +34,6 @@ class ExperimentSettings(DQNConfig):
                 "Unsupported variants: "
                 f"{invalid_variants}. Expected one of {list(VARIANT_LABELS)}."
             )
-
-    def base_config(self) -> DQNConfig:
-        """提取出单次训练所需的基础配置。"""
-        return DQNConfig(
-            **{field_.name: getattr(self, field_.name) for field_ in fields(DQNConfig)}
-        )
 
     def manifest_path(self) -> str:
         return os.path.join(self.output_root, "experiment_manifest.json")
@@ -73,7 +70,7 @@ def build_run_config(
         use_per=(variant == "per"),
         save_dir=os.path.join(run_dir, "models"),
         log_dir=os.path.join(run_dir, "logs"),
-        save_replay_buffer=settings.save_replay_buffer,
+        save_replay_buffer=base_config.save_replay_buffer,
     )
 
 
@@ -110,24 +107,25 @@ def save_manifest(manifest: dict, path: str) -> None:
 
 
 def main():
-    # 超参数
+    base_config = DQNConfig(
+        num_episodes=100_000,
+        max_steps=5_000_000,
+        eval_interval_steps=100_000,
+        eval_episodes=5,
+        save_freq=100,
+        learning_rate=2.5e-4,
+        train_freq=4,
+        gradient_steps=1,
+    )
     settings = ExperimentSettings(
+        base_config=base_config,
         envs=["ALE/Pong-v5"],
         seeds=[42],
         variants=["dqn", "per"],
-        num_episodes=100_000,
-        max_steps=3_000_000,
-        eval_interval_steps=100_000,
-        eval_episodes=10,
-        save_freq=100,
-        learning_rate=1e-4
     )
 
-    base_config = settings.base_config()
-
     os.makedirs(settings.output_root, exist_ok=True)
-
-    manifest = create_manifest(settings, base_config)
+    manifest = create_manifest(settings, settings.base_config)
 
     total_runs = len(settings.envs) * len(settings.variants) * len(settings.seeds)
     run_index = 0
@@ -135,7 +133,7 @@ def main():
     for env_name, variant, seed in settings.iter_runs():
         run_index += 1
         config = build_run_config(
-            base_config=base_config,
+            base_config=settings.base_config,
             env_name=env_name,
             seed=seed,
             variant=variant,

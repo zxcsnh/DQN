@@ -8,15 +8,23 @@ import torch.nn.functional as F
 class DQNCNN(nn.Module):
     """适用于 Atari 图像输入的 Nature DQN 卷积网络。"""
 
-    def __init__(self, input_channels: int = 4, num_actions: int = 6):
+    def __init__(
+        self,
+        input_channels: int = 4,
+        num_actions: int = 6,
+        input_shape: tuple[int, int] = (84, 84),
+    ):
         super().__init__()
+
+        self.input_channels = input_channels
+        self.input_shape = input_shape
 
         self.conv1 = nn.Conv2d(input_channels, 32, kernel_size=8, stride=4)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
         self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
 
-        # 以 84x84 输入为例，卷积输出会变成 64x7x7。
-        self.conv_output_size = 64 * 7 * 7
+        # 动态推导卷积层输出尺寸，避免将输入大小写死为 84x84。
+        self.conv_output_size = self._infer_conv_output_size()
 
         self.fc1 = nn.Linear(self.conv_output_size, 512)
         self.fc2 = nn.Linear(512, num_actions)
@@ -38,6 +46,14 @@ class DQNCNN(nn.Module):
     def get_q_values(self, state: torch.Tensor) -> torch.Tensor:
         """保留一个语义更直观的别名，便于阅读调用代码。"""
         return self.forward(state)
+
+    def _infer_conv_output_size(self) -> int:
+        with torch.no_grad():
+            dummy = torch.zeros(1, self.input_channels, *self.input_shape)
+            x = F.relu(self.conv1(dummy))
+            x = F.relu(self.conv2(x))
+            x = F.relu(self.conv3(x))
+        return x.reshape(1, -1).size(1)
 
 
 if __name__ == "__main__":
