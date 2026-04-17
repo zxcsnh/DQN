@@ -1,4 +1,4 @@
-"""单次 DQN 训练入口。"""
+"""Single-run DQN training entrypoint."""
 
 from __future__ import annotations
 
@@ -16,8 +16,12 @@ from dqn.utils import TrainingLogger, print_episode_stats, set_seed
 
 
 def train(config: DQNConfig) -> dict[str, Any]:
-    """训练一个 DQN 智能体，并保存本次运行的全部产物。"""
-    set_seed(config.seed)
+    """Train one DQN agent and persist the artifacts for this run."""
+    set_seed(
+        config.seed,
+        deterministic_torch=config.deterministic_torch,
+        allow_tf32=config.allow_tf32,
+    )
     model_prefix = config.model_name_prefix()
     training_start_step = config.learning_starts
 
@@ -60,6 +64,7 @@ def train(config: DQNConfig) -> dict[str, Any]:
             device=device,
             learning_rate=config.learning_rate,
             gamma=config.gamma,
+            random_exploration_steps=config.random_exploration_steps,
             epsilon_start=config.epsilon_start,
             epsilon_end=config.epsilon_end,
             epsilon_decay=config.epsilon_decay,
@@ -73,29 +78,26 @@ def train(config: DQNConfig) -> dict[str, Any]:
             soft_update=config.soft_update,
             tau=config.tau,
             frame_stack=config.frame_stack,
+            optimizer_name=config.optimizer_name,
+            rmsprop_alpha=config.rmsprop_alpha,
+            rmsprop_eps=config.rmsprop_eps,
+            rmsprop_centered=config.rmsprop_centered,
+            use_double_dqn=config.use_double_dqn,
+            replay_sample_torch_fastpath=config.replay_sample_torch_fastpath,
             seed=config.seed,
         )
 
-        logger = TrainingLogger(config.log_dir)
+        logger = TrainingLogger(
+            config.log_dir,
+            log_step_metrics=config.log_step_metrics,
+            step_log_interval=config.step_log_interval,
+            step_log_stream=config.step_log_stream,
+            step_log_file=config.step_log_file,
+        )
         stats = TrainingStats()
 
         os.makedirs(config.save_dir, exist_ok=True)
         os.makedirs(config.log_dir, exist_ok=True)
-
-        if config.resume_path:
-            agent.load(config.resume_path)
-            metrics_path = os.path.join(config.log_dir, "metrics.json")
-            if os.path.exists(metrics_path):
-                logger.load_metrics(metrics_path)
-
-            stats.episode = agent.episodes_done
-            stats.total_steps = agent.env_steps_done
-            stats.epsilon = agent.epsilon
-            stats.best_eval_reward = (
-                max(logger.eval_rewards) if logger.eval_rewards else -float("inf")
-            )
-            if logger.avg_rewards:
-                stats.avg_reward_100 = logger.avg_rewards[-1]
 
         with open(os.path.join(config.log_dir, "config.json"), "w", encoding="utf-8") as f:
             json.dump(asdict(config), f, indent=2, ensure_ascii=False)
@@ -104,8 +106,8 @@ def train(config: DQNConfig) -> dict[str, Any]:
         print("-" * 80)
 
         stop_training = False
-        last_episode_reward = logger.episode_rewards[-1] if logger and logger.episode_rewards else 0.0
-        last_avg_loss = logger.episode_losses[-1] if logger and logger.episode_losses else 0.0
+        last_episode_reward = logger.episode_rewards[-1] if logger.episode_rewards else 0.0
+        last_avg_loss = logger.episode_losses[-1] if logger.episode_losses else 0.0
         next_eval_step = _next_eval_step(config, stats.total_steps, logger)
 
         def run_evaluation(step: int) -> None:
@@ -121,25 +123,28 @@ def train(config: DQNConfig) -> dict[str, Any]:
             if eval_reward > stats.best_eval_reward:
                 stats.best_eval_reward = eval_reward
                 best_path = os.path.join(config.save_dir, f"{model_prefix}_best.pth")
-                agent.save(best_path, save_replay_buffer=config.save_replay_buffer)
+                agent.save(best_path)
 
-        start_episode = agent.episodes_done + 1
-        for episode in range(start_episode, config.num_episodes + 1):
+        episode = agent.episodes_done
+        while True:
+            if config.num_episodes is not None and episode >= config.num_episodes:
+                break
+            if agent.env_steps_done >= config.max_steps:
+                print(f"Reached max training steps: {config.max_steps}")
+                break
+
+            episode += 1
             reset_seed = config.seed if stats.total_steps == 0 and episode == 1 else None
             state, _ = env.reset(seed=reset_seed)
             agent.begin_episode(state)
 
             episode_reward = 0.0
-            episode_loss = []
+            episode_loss: list[float] = []
             episode_length = 0
             done = False
 
             while not done:
-                if agent.env_steps_done < training_start_step:
-                    action = env.action_space.sample()
-                else:
-                    action = agent.select_action(state)
-
+                action = agent.select_action(state)
                 next_state, reward, terminated, truncated, _ = env.step(action)
                 done = terminated or truncated
 
@@ -204,7 +209,7 @@ def train(config: DQNConfig) -> dict[str, Any]:
                 checkpoint_path = os.path.join(
                     config.save_dir, f"{model_prefix}_ep{episode}.pth"
                 )
-                agent.save(checkpoint_path, save_replay_buffer=config.save_replay_buffer)
+                agent.save(checkpoint_path)
 
             if next_eval_step is None and episode % config.eval_freq == 0:
                 run_evaluation(stats.total_steps)
@@ -221,7 +226,7 @@ def train(config: DQNConfig) -> dict[str, Any]:
                 run_evaluation(stats.total_steps)
 
         final_path = os.path.join(config.save_dir, f"{model_prefix}_final.pth")
-        agent.save(final_path, save_replay_buffer=config.save_replay_buffer)
+        agent.save(final_path)
 
         logger.save_metrics(os.path.join(config.log_dir, "metrics.json"))
         logger.plot_training_curves(os.path.join(config.log_dir, "training_curves.png"))
@@ -230,6 +235,8 @@ def train(config: DQNConfig) -> dict[str, Any]:
             "env_name": config.env_name,
             "seed": config.seed,
             "use_per": config.use_per,
+            "use_double_dqn": config.use_double_dqn,
+            "optimizer_name": config.optimizer_name,
             "total_steps": stats.total_steps,
             "episodes_completed": stats.episode,
             "best_eval_reward": stats.best_eval_reward,
@@ -261,7 +268,7 @@ def train(config: DQNConfig) -> dict[str, Any]:
         ):
             error_path = os.path.join(config.save_dir, f"{model_prefix}_error.pth")
             try:
-                agent.save(error_path, save_replay_buffer=config.save_replay_buffer)
+                agent.save(error_path)
             except Exception as save_exc:
                 print(f"Warning: failed to save error checkpoint: {save_exc}")
         raise
@@ -280,7 +287,7 @@ def evaluate(
     config: DQNConfig,
     num_eval: int = 10,
 ) -> float:
-    """用贪心策略评估模型，并返回平均回报。"""
+    """Evaluate the policy and return the mean reward."""
     if num_eval <= 0:
         raise ValueError("num_eval must be a positive integer.")
 
@@ -292,12 +299,24 @@ def evaluate(
             eval_seed = config.seed + config.eval_seed_offset + eval_idx
             state, _ = eval_env.reset(seed=eval_seed)
             episode_reward = 0.0
+            episode_steps = 0
             done = False
 
             while not done:
-                action = agent.select_action(state, evaluate=True)
+                if (
+                    config.eval_max_episode_steps is not None
+                    and episode_steps >= config.eval_max_episode_steps
+                ):
+                    break
+
+                action = agent.select_action(
+                    state,
+                    evaluate=True,
+                    epsilon_override=config.eval_epsilon,
+                )
                 state, reward, terminated, truncated, _ = eval_env.step(action)
                 episode_reward += reward
+                episode_steps += 1
                 done = terminated or truncated
 
             total_rewards.append(episode_reward)
@@ -339,7 +358,7 @@ def _best_eval_step(logger: TrainingLogger) -> int | None:
     return logger.eval_steps[best_index]
 
 
-def main():
+def main() -> None:
     config = DQNConfig()
     train(config)
 

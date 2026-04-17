@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import random
-from typing import Any, Dict, Optional, Tuple
+from collections import deque
+from typing import Optional, Tuple
 
 import numpy as np
+import torch
 
 
 class SumTree:
@@ -39,17 +41,6 @@ class SumTree:
                 index = left + 1
         return index - self.capacity
 
-    def state_dict(self) -> Dict[str, Any]:
-        return {
-            "capacity": self.capacity,
-            "tree": self.tree.copy(),
-        }
-
-    def load_state_dict(self, state: Dict[str, Any]) -> None:
-        self.capacity = state["capacity"]
-        self.tree = state["tree"]
-
-
 class ReplayBuffer:
     """按帧去重存储的均匀采样经验回放。"""
 
@@ -74,6 +65,7 @@ class ReplayBuffer:
 
         # 只保存每个环境状态的“最新一帧”，按需重建 frame stack。
         self.frames: dict[int, np.ndarray] = {}
+        self.frame_queue: deque[int] = deque()
         self.next_state_index = 0
         self.current_state_idx: Optional[int] = None
         self.current_episode_start_idx: Optional[int] = None
@@ -84,10 +76,7 @@ class ReplayBuffer:
 
     def start_episode(self, initial_state: np.ndarray) -> None:
         """在每个 episode reset 后注册初始观测。"""
-        latest_frame = self._extract_latest_frame(initial_state)
-        state_idx = self.next_state_index
-        self.frames[state_idx] = latest_frame
-        self.next_state_index += 1
+        state_idx = self._store_frame(initial_state)
         self.current_state_idx = state_idx
         self.current_episode_start_idx = state_idx
 
@@ -132,56 +121,22 @@ class ReplayBuffer:
         indices = np.array(random.sample(range(self.size), batch_size), dtype=np.int64)
         return self._build_batch(indices)
 
+    def sample_tensors(
+        self,
+        batch_size: int,
+        device: str | torch.device,
+    ) -> Tuple[torch.Tensor, ...]:
+        if batch_size > self.size:
+            raise ValueError("batch_size cannot exceed replay buffer size.")
+
+        indices = np.array(random.sample(range(self.size), batch_size), dtype=np.int64)
+        return self._build_batch_tensors(indices, device=device)
+
     def __len__(self) -> int:
         return self.size
 
     def is_ready(self, min_size: int) -> bool:
         return self.size >= min_size
-
-    def state_dict(self) -> Dict[str, Any]:
-        """保存完整缓冲区状态，便于中断后继续训练。"""
-        return {
-            "capacity": self.capacity,
-            "frame_stack": self.frame_stack,
-            "actions": self.actions.copy(),
-            "rewards": self.rewards.copy(),
-            "terminated": self.terminated.copy(),
-            "truncated": self.truncated.copy(),
-            "state_indices": self.state_indices.copy(),
-            "episode_start_indices": self.episode_start_indices.copy(),
-            "position": self.position,
-            "size": self.size,
-            "frames": {idx: frame.copy() for idx, frame in self.frames.items()},
-            "next_state_index": self.next_state_index,
-            "current_state_idx": self.current_state_idx,
-            "current_episode_start_idx": self.current_episode_start_idx,
-        }
-
-    def load_state_dict(self, state: Dict[str, Any]):
-        """从 checkpoint 中恢复缓冲区状态。"""
-        if "frames" not in state:
-            raise ValueError(
-                "Legacy replay buffer checkpoints are not compatible with the "
-                "frame-deduplicated buffer. Resume from a newer checkpoint instead."
-            )
-
-        self.capacity = state["capacity"]
-        self.frame_stack = state["frame_stack"]
-        self.actions = state["actions"]
-        self.rewards = state["rewards"]
-        self.terminated = state["terminated"]
-        self.truncated = state["truncated"]
-        self.state_indices = state["state_indices"]
-        self.episode_start_indices = state["episode_start_indices"]
-        self.position = state["position"]
-        self.size = state["size"]
-        self.frames = {
-            int(idx): np.asarray(frame, dtype=np.uint8)
-            for idx, frame in state["frames"].items()
-        }
-        self.next_state_index = state["next_state_index"]
-        self.current_state_idx = state["current_state_idx"]
-        self.current_episode_start_idx = state["current_episode_start_idx"]
 
     def _store_transition(
         self,
@@ -201,42 +156,106 @@ class ReplayBuffer:
         self.episode_start_indices[slot] = episode_start_idx
 
     def _register_next_state(self, next_state: np.ndarray) -> int:
-        latest_frame = self._extract_latest_frame(next_state)
+        return self._store_frame(next_state)
+
+    def _store_frame(self, state: np.ndarray) -> int:
+        latest_frame = self._extract_latest_frame(state)
         state_idx = self.next_state_index
         self.frames[state_idx] = latest_frame
+        self.frame_queue.append(state_idx)
         self.next_state_index += 1
         return state_idx
 
     def _build_batch(self, slots: np.ndarray) -> Tuple[np.ndarray, ...]:
-        states = []
-        next_states = []
+        return self._build_batch_arrays(slots)
 
-        for slot in slots:
+    def _build_batch_arrays(
+        self,
+        slots: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        batch_size = int(len(slots))
+        frame_shape = self._frame_shape()
+        states = np.empty((batch_size, self.frame_stack, *frame_shape), dtype=np.uint8)
+        next_states = np.empty_like(states)
+
+        for batch_idx, slot in enumerate(slots):
             state_idx = int(self.state_indices[slot])
             episode_start_idx = int(self.episode_start_indices[slot])
-            states.append(self._build_state(state_idx, episode_start_idx))
-            next_states.append(self._build_state(state_idx + 1, episode_start_idx))
+            self._fill_state_array(states[batch_idx], state_idx, episode_start_idx)
+            self._fill_state_array(next_states[batch_idx], state_idx + 1, episode_start_idx)
 
         return (
-            np.stack(states, axis=0),
+            states,
             self.actions[slots].copy(),
             self.rewards[slots].copy(),
-            np.stack(next_states, axis=0),
+            next_states,
             self.terminated[slots].astype(np.float32),
             self.truncated[slots].astype(np.float32),
         )
 
+    def _build_batch_tensors(
+        self,
+        slots: np.ndarray,
+        device: str | torch.device,
+    ) -> Tuple[torch.Tensor, ...]:
+        states, actions, rewards, next_states, terminated, truncated = (
+            self._build_batch_arrays(slots)
+        )
+        return (
+            self._array_to_tensor(states, device=device),
+            self._array_to_tensor(actions, device=device, dtype=torch.long),
+            self._array_to_tensor(rewards, device=device, dtype=torch.float32),
+            self._array_to_tensor(next_states, device=device),
+            self._array_to_tensor(terminated, device=device, dtype=torch.float32),
+            self._array_to_tensor(truncated, device=device, dtype=torch.float32),
+        )
+
     def _build_state(self, state_idx: int, episode_start_idx: int) -> np.ndarray:
+        state = np.empty((self.frame_stack, *self._frame_shape()), dtype=np.uint8)
+        self._fill_state_array(state, state_idx, episode_start_idx)
+        return state
+
+    def _fill_state_array(
+        self,
+        output: np.ndarray,
+        state_idx: int,
+        episode_start_idx: int,
+    ) -> None:
         start_idx = max(episode_start_idx, state_idx - self.frame_stack + 1)
-        frames = [self.frames[idx] for idx in range(start_idx, state_idx + 1)]
-        if not frames:
+        if start_idx > state_idx:
             raise ValueError("Failed to reconstruct stacked observation from replay buffer.")
 
-        pad_count = self.frame_stack - len(frames)
+        first_frame = self.frames[start_idx]
+        frame_count = state_idx - start_idx + 1
+        pad_count = self.frame_stack - frame_count
         if pad_count > 0:
-            frames = [frames[0]] * pad_count + frames
+            output[:pad_count] = first_frame
 
-        return np.stack(frames, axis=0)
+        output_idx = pad_count
+        for idx in range(start_idx, state_idx + 1):
+            output[output_idx] = self.frames[idx]
+            output_idx += 1
+
+    def _frame_shape(self) -> tuple[int, ...]:
+        if not self.frames:
+            raise ValueError("Replay buffer has no frames to infer observation shape from.")
+        return next(iter(self.frames.values())).shape
+
+    @staticmethod
+    def _array_to_tensor(
+        array: np.ndarray,
+        device: str | torch.device,
+        dtype: torch.dtype | None = None,
+    ) -> torch.Tensor:
+        device = torch.device(device)
+        tensor = torch.from_numpy(np.ascontiguousarray(array))
+        if device.type == "cuda":
+            tensor = tensor.to(device=device, non_blocking=True)
+        else:
+            tensor = tensor.to(device=device)
+        if dtype is not None and tensor.dtype != dtype:
+            tensor = tensor.to(dtype=dtype)
+        return tensor
 
     def _prune_frames(self) -> None:
         if self.size == 0:
@@ -249,8 +268,8 @@ class ReplayBuffer:
             oldest_episode_start_idx, oldest_state_idx - self.frame_stack + 1
         )
 
-        stale_indices = [idx for idx in self.frames if idx < min_required_idx]
-        for idx in stale_indices:
+        while self.frame_queue and self.frame_queue[0] < min_required_idx:
+            idx = self.frame_queue.popleft()
             del self.frames[idx]
 
     @staticmethod
@@ -335,41 +354,55 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         batch = self._build_batch(slots)
         return (*batch, slots, weights.astype(np.float32))
 
+    def sample_tensors(
+        self,
+        batch_size: int,
+        device: str | torch.device,
+    ) -> Tuple[torch.Tensor, ...]:
+        if batch_size > self.size:
+            raise ValueError("batch_size cannot exceed replay buffer size.")
+
+        self.frame += 1
+        beta = min(
+            1.0,
+            self.beta_start + (1.0 - self.beta_start) * self.frame / self.beta_frames,
+        )
+
+        total_priority = self.tree.total()
+        if total_priority <= 0:
+            slots = np.array(random.sample(range(self.size), batch_size), dtype=np.int64)
+            probs = np.full(batch_size, 1.0 / self.size, dtype=np.float32)
+        else:
+            segment = total_priority / batch_size
+            sampled_slots = []
+            probs = []
+            for idx in range(batch_size):
+                left = segment * idx
+                right = segment * (idx + 1)
+                mass = random.uniform(left, right)
+                slot = self.tree.get(mass)
+                while slot >= self.size:
+                    mass = random.uniform(0.0, total_priority)
+                    slot = self.tree.get(mass)
+                sampled_slots.append(slot)
+                probs.append(self.priorities[slot] / total_priority)
+
+            slots = np.array(sampled_slots, dtype=np.int64)
+            probs = np.asarray(probs, dtype=np.float32)
+
+        weights = (self.size * probs) ** (-beta)
+        weights = weights / weights.max()
+
+        batch = self._build_batch_tensors(slots, device=device)
+        return (
+            *batch,
+            self._array_to_tensor(slots, device=device, dtype=torch.long),
+            self._array_to_tensor(weights.astype(np.float32), device=device, dtype=torch.float32),
+        )
+
     def update_priorities(self, indices: np.ndarray, priorities: np.ndarray):
         for index, priority in zip(indices, priorities):
             adjusted = float(max(priority, 1e-6) ** self.alpha)
             self.priorities[index] = adjusted
             self.tree.update(int(index), adjusted)
             self.max_priority = max(self.max_priority, adjusted)
-
-    def state_dict(self) -> Dict[str, Any]:
-        state = super().state_dict()
-        state.update(
-            {
-                "alpha": self.alpha,
-                "beta_start": self.beta_start,
-                "beta_frames": self.beta_frames,
-                "frame": self.frame,
-                "max_priority": self.max_priority,
-                "priorities": self.priorities.copy(),
-                "tree": self.tree.state_dict(),
-            }
-        )
-        return state
-
-    def load_state_dict(self, state: Dict[str, Any]):
-        if "tree" not in state:
-            raise ValueError(
-                "Legacy prioritized replay checkpoints are not compatible with the "
-                "SumTree-based buffer. Resume from a newer checkpoint instead."
-            )
-
-        super().load_state_dict(state)
-        self.alpha = state["alpha"]
-        self.beta_start = state["beta_start"]
-        self.beta_frames = state["beta_frames"]
-        self.frame = state["frame"]
-        self.max_priority = state["max_priority"]
-        self.priorities = state["priorities"]
-        self.tree = SumTree(self.capacity)
-        self.tree.load_state_dict(state["tree"])

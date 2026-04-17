@@ -1,9 +1,9 @@
-# Atari 上的 Double DQN 与 PER-DQN 对比项目
+# Atari 上的 Nature DQN 与 PER-DQN 对比项目
 
 这是一个基于 PyTorch 的 Atari 强化学习项目，包含单次训练、模型回放、批量实验和结果汇总。当前实现已经从最初的基础 DQN 演进为更接近可复现实验基线的版本：
 
-- 标准分支使用 `Double DQN` target
-- PER 分支使用 `Double DQN + Prioritized Experience Replay`
+- 标准分支使用更接近 Nature 2015 的原版 `DQN` target
+- PER 分支在此基础上加入 `Prioritized Experience Replay`
 - 训练主循环支持 warmup、固定训练频率、评估环境复用和断点恢复
 - 回放缓冲区已重构为按帧去重存储，PER 采样使用 `SumTree`
 
@@ -11,18 +11,17 @@
 
 ## 当前功能
 
-- `Double DQN`：目标网络、experience replay、epsilon-greedy 探索
+- `DQN`：目标网络、experience replay、epsilon-greedy 探索
 - `PER-DQN`：优先经验回放、重要性采样权重、`SumTree` 采样
 - Atari 预处理：灰度化、跳帧、帧堆叠、奖励裁剪、可选生命丢失终止
 - 训练优化：
-  - `learning_starts` 前随机探索
+  - `random_exploration_steps` 前纯随机探索，之后从 `epsilon=1.0` 开始 epsilon-greedy
   - `train_freq / gradient_steps` 控制训练节奏
   - 评估环境复用，减少重复初始化开销
   - step 级训练日志
   - 训练异常时可自动保存错误 checkpoint
 - 工程能力：
-  - checkpoint 保存/加载
-  - `resume_path` 继续训练
+  - 模型工件保存/加载（用于评估、演示与结果归档）
   - 批量实验 manifest
   - 以评估指标为主的 CSV / JSON / Markdown 汇总与对比图输出
 
@@ -57,38 +56,12 @@ python train.py
 - `env_name`：环境名
 - `use_per`：是否启用 PER
 - `max_steps`：总环境步数上限
+- `random_exploration_steps`：纯随机 warmup 步数
 - `learning_starts`：训练启动门槛
 - `train_freq` / `gradient_steps`：训练频率
 - `eval_interval_steps` / `eval_episodes`：评估节奏
-- `resume_path`：从 checkpoint 恢复训练
-- `save_replay_buffer`：是否将 replay buffer 一并写入 checkpoint
 
-### 2. 从 checkpoint 恢复训练
-
-在 [config.py](/e:/Programming_Language/MachineLearning/RL/DQN/config.py:1) 中设置：
-
-```python
-resume_path = "models/ALE_Pong-v5_final.pth"
-```
-
-然后重新运行：
-
-```bash
-python train.py
-```
-
-恢复时会尝试继续加载：
-
-- 模型参数
-- 目标网络参数
-- optimizer 状态
-- `steps_done`
-- `env_steps_done`
-- `episodes_done`
-- `epsilon`
-- replay buffer 状态（仅当 checkpoint 由当前版本生成且保存了 replay buffer）
-
-### 3. 模型演示或录制视频
+### 2. 模型演示或录制视频
 
 ```bash
 python play.py
@@ -96,7 +69,7 @@ python play.py
 
 是否渲染、是否录制视频等设置在 [config.py](/e:/Programming_Language/MachineLearning/RL/DQN/config.py:1) 中修改。
 
-### 4. 运行批量实验
+### 3. 运行批量实验
 
 实验入口在 [experiment.py](/e:/Programming_Language/MachineLearning/RL/DQN/experiment.py:1)。
 
@@ -138,7 +111,7 @@ experiments/
         models/
 ```
 
-### 5. 汇总实验结果
+### 4. 汇总实验结果
 
 在 [summarize_experiments.py](/e:/Programming_Language/MachineLearning/RL/DQN/summarize_experiments.py:1) 中设置：
 
@@ -189,18 +162,20 @@ python summarize_experiments.py
 - `*_best.pth`：按评估分数保存的最优模型
 - `*_final.pth`：训练结束时保存的最终模型
 - `*_ep{n}.pth`：按 `save_freq` 保存的中间 checkpoint
-- `*_error.pth`：训练异常中断时保存的错误现场 checkpoint
+- `*_error.pth`：训练异常中断时保存的错误现场模型
+
+这些文件只保存模型权重与必要元数据，用于评估、播放和结果归档；当前版本不再提供“保存完整训练现场并继续训练”的能力。
 
 ## 当前实现细节说明
 
-### 1. 标准分支已经是 Double DQN
+### 1. 标准分支已回到 Nature DQN 结构
 
-虽然项目目录和脚本命名仍沿用 `dqn` / `per_dqn`，但当前“普通分支”内部已经不是最原始的标准 DQN target，而是 `Double DQN` target。
+当前“普通分支”使用与 Nature 2015 更接近的标准 DQN target、Nature 风格的 RMSProp 配置，以及按 frame budget 驱动的训练协议。
 
 也就是说：
 
-- `dqn` 分支：`Double DQN`
-- `per` 分支：`Double DQN + PER`
+- `dqn` 分支：`Nature DQN`
+- `per` 分支：`Nature DQN + PER`
 
 ### 2. ReplayBuffer 已做结构重构
 
@@ -214,16 +189,6 @@ python summarize_experiments.py
 ### 3. PER 已使用 SumTree
 
 当前 PER 采样不再依赖每次全量概率归一化加 `np.random.choice(..., p=probs)`，而是改为 `SumTree` 结构采样。
-
-### 4. 恢复训练的兼容性说明
-
-如果 checkpoint 来自当前版本，并且保存时启用了 `save_replay_buffer=True`，则可以完整恢复 replay buffer 状态。
-
-如果 checkpoint 来自旧版本：
-
-- 模型参数仍可加载
-- 旧版 replay buffer 状态可能无法恢复到当前新结构
-- 程序会给出 warning，而不是直接中断
 
 ## 论文或实验汇报建议
 
@@ -244,7 +209,7 @@ python summarize_experiments.py
 - [experiment.py](/e:/Programming_Language/MachineLearning/RL/DQN/experiment.py:1)：批量实验入口
 - [summarize_experiments.py](/e:/Programming_Language/MachineLearning/RL/DQN/summarize_experiments.py:1)：结果汇总与绘图
 - [config.py](/e:/Programming_Language/MachineLearning/RL/DQN/config.py:1)：训练配置定义
-- [dqn/agent.py](/e:/Programming_Language/MachineLearning/RL/DQN/dqn/agent.py:1)：Double DQN / PER 训练逻辑
+- [dqn/agent.py](/e:/Programming_Language/MachineLearning/RL/DQN/dqn/agent.py:1)：Nature DQN / PER 训练逻辑
 - [dqn/replay_buffer.py](/e:/Programming_Language/MachineLearning/RL/DQN/dqn/replay_buffer.py:1)：回放缓冲区与 `SumTree`
 - [dqn/network.py](/e:/Programming_Language/MachineLearning/RL/DQN/dqn/network.py:1)：卷积 Q 网络
 - [dqn/env.py](/e:/Programming_Language/MachineLearning/RL/DQN/dqn/env.py:1)：Atari 环境预处理

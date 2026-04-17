@@ -70,7 +70,6 @@ def build_run_config(
         use_per=(variant == "per"),
         save_dir=os.path.join(run_dir, "models"),
         log_dir=os.path.join(run_dir, "logs"),
-        save_replay_buffer=base_config.save_replay_buffer,
     )
 
 
@@ -107,16 +106,7 @@ def save_manifest(manifest: dict, path: str) -> None:
 
 
 def main():
-    base_config = DQNConfig(
-        num_episodes=100_000,
-        max_steps=5_000_000,
-        eval_interval_steps=100_000,
-        eval_episodes=5,
-        save_freq=100,
-        learning_rate=2.5e-4,
-        train_freq=4,
-        gradient_steps=1,
-    )
+    base_config = DQNConfig()
     settings = ExperimentSettings(
         base_config=base_config,
         envs=["ALE/Pong-v5"],

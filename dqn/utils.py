@@ -1,18 +1,31 @@
-"""训练日志、可视化与随机种子工具。"""
+"""Training logging, plotting, and random seed utilities."""
+
+from __future__ import annotations
 
 import json
 import os
-from typing import List, Optional
+from typing import List, Optional, TextIO
 
 import matplotlib.pyplot as plt
 import numpy as np
 
 
 class TrainingLogger:
-    """记录训练过程中常用的标量指标。"""
+    """Track training metrics with optional sampled step-level logging."""
 
-    def __init__(self, log_dir: str = "runs"):
+    def __init__(
+        self,
+        log_dir: str = "runs",
+        log_step_metrics: bool = True,
+        step_log_interval: int = 1000,
+        step_log_stream: bool = True,
+        step_log_file: str = "step_metrics.jsonl",
+    ):
         self.log_dir = log_dir
+        self.log_step_metrics = bool(log_step_metrics)
+        self.step_log_interval = max(1, int(step_log_interval))
+        self.step_log_stream = bool(step_log_stream)
+        self.step_log_file = step_log_file
 
         os.makedirs(log_dir, exist_ok=True)
 
@@ -27,15 +40,40 @@ class TrainingLogger:
         self.step_losses: List[float] = []
         self.step_epsilons: List[float] = []
 
-        # 先按 step 暂存 loss，等 episode 结束后再聚合成单个值。
+        # Keep per-update losses only within one episode for episode-level loss stats.
         self.current_episode_loss: List[float] = []
 
+        self._step_accum_count = 0
+        self._step_accum_loss_sum = 0.0
+        self._step_accum_epsilon_sum = 0.0
+        self._step_accum_last_step = 0
+
+        self.step_log_path: str | None = (
+            os.path.join(self.log_dir, self.step_log_file)
+            if self.log_step_metrics and self.step_log_stream
+            else None
+        )
+        self._step_stream_fp: TextIO | None = None
+        if self.step_log_path is not None:
+            self._step_stream_fp = open(self.step_log_path, "w", encoding="utf-8")
+
     def log_step(self, step: int, epsilon: float, loss: Optional[float] = None):
-        if loss is not None:
-            self.global_steps.append(int(step))
-            self.step_epsilons.append(float(epsilon))
-            self.step_losses.append(float(loss))
-            self.current_episode_loss.append(loss)
+        if loss is None:
+            return
+
+        loss_value = float(loss)
+        epsilon_value = float(epsilon)
+        self.current_episode_loss.append(loss_value)
+
+        if not self.log_step_metrics:
+            return
+
+        self._step_accum_count += 1
+        self._step_accum_loss_sum += loss_value
+        self._step_accum_epsilon_sum += epsilon_value
+        self._step_accum_last_step = int(step)
+        if self._step_accum_count >= self.step_log_interval:
+            self._flush_step_aggregate()
 
     def log_episode(self, episode: int, reward: float, length: int, epsilon: float):
         self.episode_rewards.append(reward)
@@ -48,7 +86,6 @@ class TrainingLogger:
         self.episode_losses.append(float(avg_loss))
         self.current_episode_loss = []
 
-        # 使用最近 100 个 episode 的均值作为平滑指标。
         avg_reward = float(np.mean(self.episode_rewards[-100:]))
         self.avg_rewards.append(avg_reward)
 
@@ -98,6 +135,7 @@ class TrainingLogger:
         plt.close(fig)
 
     def save_metrics(self, path: str):
+        self._flush_step_aggregate()
         metrics = {
             "episode_rewards": self.episode_rewards,
             "episode_lengths": self.episode_lengths,
@@ -109,6 +147,8 @@ class TrainingLogger:
             "global_steps": self.global_steps,
             "step_losses": self.step_losses,
             "step_epsilons": self.step_epsilons,
+            "step_log_interval": self.step_log_interval,
+            "step_log_path": self.step_log_path,
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(metrics, f, indent=2)
@@ -126,9 +166,41 @@ class TrainingLogger:
         self.global_steps = metrics.get("global_steps", [])
         self.step_losses = metrics.get("step_losses", [])
         self.step_epsilons = metrics.get("step_epsilons", [])
+        self.step_log_interval = int(
+            metrics.get("step_log_interval", self.step_log_interval)
+        )
+        self.step_log_path = metrics.get("step_log_path", self.step_log_path)
 
     def close(self):
-        pass
+        self._flush_step_aggregate()
+        if self._step_stream_fp is not None:
+            self._step_stream_fp.close()
+            self._step_stream_fp = None
+
+    def _flush_step_aggregate(self) -> None:
+        if self._step_accum_count <= 0:
+            return
+
+        avg_loss = self._step_accum_loss_sum / self._step_accum_count
+        avg_epsilon = self._step_accum_epsilon_sum / self._step_accum_count
+
+        self.global_steps.append(self._step_accum_last_step)
+        self.step_losses.append(float(avg_loss))
+        self.step_epsilons.append(float(avg_epsilon))
+
+        if self._step_stream_fp is not None:
+            record = {
+                "step": self._step_accum_last_step,
+                "avg_loss": float(avg_loss),
+                "avg_epsilon": float(avg_epsilon),
+                "num_updates": self._step_accum_count,
+            }
+            self._step_stream_fp.write(json.dumps(record, ensure_ascii=False) + "\n")
+            self._step_stream_fp.flush()
+
+        self._step_accum_count = 0
+        self._step_accum_loss_sum = 0.0
+        self._step_accum_epsilon_sum = 0.0
 
 
 def print_episode_stats(
@@ -151,8 +223,12 @@ def print_episode_stats(
     )
 
 
-def set_seed(seed: int):
-    """尽量固定 Python、NumPy 与 PyTorch 的随机性。"""
+def set_seed(
+    seed: int,
+    deterministic_torch: bool = False,
+    allow_tf32: bool = True,
+):
+    """Try to fix random seeds in Python, NumPy and PyTorch."""
     import random
 
     import torch
@@ -164,34 +240,11 @@ def set_seed(seed: int):
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
     if hasattr(torch.backends, "cudnn"):
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-
-
-def save_checkpoint(model, optimizer, episode: int, reward: float, path: str):
-    import torch
-
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    torch.save(
-        {
-            "episode": episode,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "best_reward": reward,
-        },
-        path,
-    )
-
-
-def load_checkpoint(model, optimizer, path: str, device: str = "cpu"):
-    import torch
-
-    checkpoint = torch.load(path, map_location=device)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    if optimizer is not None:
-        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-
-    return {
-        "episode": checkpoint.get("episode", 0),
-        "best_reward": checkpoint.get("best_reward", 0),
-    }
+        torch.backends.cudnn.deterministic = deterministic_torch
+        torch.backends.cudnn.benchmark = not deterministic_torch
+        if hasattr(torch.backends.cudnn, "allow_tf32"):
+            torch.backends.cudnn.allow_tf32 = allow_tf32
+    if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
+        torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+    if hasattr(torch, "set_float32_matmul_precision"):
+        torch.set_float32_matmul_precision("high" if allow_tf32 else "highest")
