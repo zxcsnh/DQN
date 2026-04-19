@@ -23,7 +23,7 @@ def train(config: DQNConfig) -> dict[str, Any]:
         allow_tf32=config.allow_tf32,
     )
     model_prefix = config.model_name_prefix()
-    training_start_step = config.learning_starts
+    training_start_step = _resolve_training_start_step(config)
 
     env = None
     eval_env = None
@@ -56,6 +56,7 @@ def train(config: DQNConfig) -> dict[str, Any]:
         print(f"Training device: {device}")
         print(f"Environment: {config.env_name}")
         print(f"Num actions: {env.action_space.n}")
+        print(f"Training starts at env step: {training_start_step}")
 
         agent = DQNAgent(
             num_actions=env.action_space.n,
@@ -332,6 +333,13 @@ def _should_train(agent: DQNAgent, config: DQNConfig, training_start_step: int) 
         and agent.env_steps_done >= training_start_step
         and agent.env_steps_done % config.train_freq == 0
     )
+
+
+def _resolve_training_start_step(config: DQNConfig) -> int:
+    training_start_step = config.learning_starts
+    if config.align_training_start_with_random_exploration:
+        training_start_step = max(training_start_step, config.random_exploration_steps)
+    return training_start_step
 
 
 def _next_eval_step(

@@ -29,7 +29,10 @@ class DQNConfig:
     # Replay and update schedule.
     buffer_size: int = 1_000_000
     # Begin optimization only after the replay buffer has enough experience.
-    learning_starts: int = 50_000
+    learning_starts: int = 100_000
+    # By default, start optimization after random exploration finishes to keep
+    # loss updates and epsilon decay schedule aligned.
+    align_training_start_with_random_exploration: bool = True
     train_freq: int = 4
     gradient_steps: int = 1
     use_per: bool = False
@@ -84,7 +87,7 @@ class DQNConfig:
 
     # Playback and video recording.
     render: bool = False
-    save_video: bool = False
+    save_video: bool = True
     video_dir: str = "videos"
 
     def get_device(self) -> str:
