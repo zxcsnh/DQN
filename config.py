@@ -15,7 +15,7 @@ class DQNConfig:
 
     # Nature DQN is primarily constrained by frame budget, not episode count.
     num_episodes: int | None = None
-    max_steps: int = 50_000_000
+    max_steps: int = 20_000_000
     batch_size: int = 32
     learning_rate: float = 2.5e-4
     gamma: float = 0.99
@@ -28,30 +28,31 @@ class DQNConfig:
 
     # Replay and update schedule.
     buffer_size: int = 1_000_000
-    # Begin optimization only after the replay buffer has enough experience.
-    learning_starts: int = 100_000
-    # By default, start optimization after random exploration finishes to keep
-    # loss updates and epsilon decay schedule aligned.
-    align_training_start_with_random_exploration: bool = True
+    # Number of environment steps that must be collected before SGD updates start.
+    # Set this equal to initial_random_steps to match the classic DQN warmup.
+    training_start_steps: int = 100_000
     train_freq: int = 4
     gradient_steps: int = 1
     use_per: bool = False
     per_alpha: float = 0.6
     per_beta_start: float = 0.4
-    per_beta_frames: int = 100_000
+    # Annealed by replay-sampling updates, not by environment frames.
+    per_beta_updates: int = 100_000
     use_double_dqn: bool = False
 
     # Exploration.
     # Collect uniformly random experience first, then start epsilon-greedy from epsilon_start.
-    random_exploration_steps: int = 100_000
+    initial_random_steps: int = 100_000
     epsilon_start: float = 1.0
     epsilon_end: float = 0.1
     epsilon_decay: int = 1_000_000
 
     # Target network updates.
-    target_update_freq: int = 10_000
-    soft_update: bool = False
-    tau: float = 0.005
+    # Hard target sync cadence measured in optimizer updates, not env steps.
+    target_update_interval_updates: int = 10_000
+    use_soft_target_update: bool = False
+    # Only used when use_soft_target_update=True.
+    soft_target_update_tau: float = 0.005
 
     # Checkpointing and logging.
     save_dir: str = "models"
@@ -64,8 +65,10 @@ class DQNConfig:
     step_log_file: str = "step_metrics.jsonl"
 
     # Evaluation. Nature DQN evaluates with epsilon=0.05 and a frame cap.
-    eval_interval_steps: int = 250_000
-    eval_freq: int = 50
+    # Preferred cadence measured in environment steps.
+    eval_interval_env_steps: int = 250_000
+    # Fallback cadence used only when eval_interval_env_steps <= 0.
+    eval_interval_episodes: int = 50
     eval_episodes: int = 30
     eval_epsilon: float = 0.05
     eval_seed_offset: int = 100_000

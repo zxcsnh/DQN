@@ -22,19 +22,19 @@ class DQNAgent:
         device: str = "cpu",
         learning_rate: float = 2.5e-4,
         gamma: float = 0.99,
-        random_exploration_steps: int = 100_000,
+        initial_random_steps: int = 100_000,
         epsilon_start: float = 1.0,
         epsilon_end: float = 0.1,
         epsilon_decay: int = 1_000_000,
         buffer_size: int = 1_000_000,
         batch_size: int = 32,
-        target_update_freq: int = 10_000,
+        target_update_interval_updates: int = 10_000,
         use_per: bool = False,
         per_alpha: float = 0.6,
         per_beta_start: float = 0.4,
-        per_beta_frames: int = 100_000,
-        soft_update: bool = False,
-        tau: float = 0.005,
+        per_beta_updates: int = 100_000,
+        use_soft_target_update: bool = False,
+        soft_target_update_tau: float = 0.005,
         frame_stack: int = 4,
         input_shape: tuple[int, int] = (84, 84),
         optimizer_name: str = "rmsprop",
@@ -49,16 +49,16 @@ class DQNAgent:
         self.device = device
         self.gamma = gamma
         self.batch_size = batch_size
-        self.target_update_freq = target_update_freq
+        self.target_update_interval_updates = target_update_interval_updates
         self.use_per = use_per
-        self.soft_update = soft_update
-        self.tau = tau
+        self.use_soft_target_update = use_soft_target_update
+        self.soft_target_update_tau = soft_target_update_tau
         self.input_channels = input_channels
         self.input_shape = input_shape
         self.optimizer_name = optimizer_name
         self.use_double_dqn = use_double_dqn
         self.replay_sample_torch_fastpath = replay_sample_torch_fastpath
-        self.random_exploration_steps = max(0, random_exploration_steps)
+        self.initial_random_steps = max(0, initial_random_steps)
 
         self.epsilon = epsilon_start
         self.epsilon_start = epsilon_start
@@ -92,7 +92,7 @@ class DQNAgent:
                 frame_stack=frame_stack,
                 alpha=per_alpha,
                 beta_start=per_beta_start,
-                beta_frames=per_beta_frames,
+                beta_updates=per_beta_updates,
                 seed=seed,
             )
         else:
@@ -144,7 +144,7 @@ class DQNAgent:
         elif evaluate:
             epsilon = 0.0
         else:
-            if self.env_steps_done < self.random_exploration_steps:
+            if self.env_steps_done < self.initial_random_steps:
                 return int(np.random.randint(self.num_actions))
             epsilon = self.epsilon
 
@@ -286,22 +286,22 @@ class DQNAgent:
             priorities = loss_info["td_errors"].detach().abs().cpu().numpy() + 1e-6
             self.memory.update_priorities(priority_indices, priorities)
 
-        if self.soft_update:
+        if self.use_soft_target_update:
             self.soft_update_target_network()
-        elif self.steps_done % self.target_update_freq == 0:
+        elif self.steps_done % self.target_update_interval_updates == 0:
             self.update_target_network()
 
         return float(loss.item())
 
     def update_epsilon(self) -> None:
-        if self.env_steps_done <= self.random_exploration_steps:
+        if self.env_steps_done <= self.initial_random_steps:
             self.epsilon = self.epsilon_start
             return
         if self.epsilon_decay <= 0:
             self.epsilon = self.epsilon_end
             return
 
-        epsilon_step = self.env_steps_done - self.random_exploration_steps
+        epsilon_step = self.env_steps_done - self.initial_random_steps
         remaining = max(0, self.epsilon_decay - epsilon_step)
         self.epsilon = self.epsilon_end + (self.epsilon_start - self.epsilon_end) * (
             remaining / self.epsilon_decay
@@ -317,7 +317,8 @@ class DQNAgent:
             self.policy_net.parameters(),
         ):
             target_param.data.copy_(
-                (1.0 - self.tau) * target_param.data + self.tau * policy_param.data
+                (1.0 - self.soft_target_update_tau) * target_param.data
+                + self.soft_target_update_tau * policy_param.data
             )
 
     def save(self, path: str) -> None:

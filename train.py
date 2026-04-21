@@ -23,7 +23,7 @@ def train(config: DQNConfig) -> dict[str, Any]:
         allow_tf32=config.allow_tf32,
     )
     model_prefix = config.model_name_prefix()
-    training_start_step = _resolve_training_start_step(config)
+    training_start_step = config.training_start_steps
 
     env = None
     eval_env = None
@@ -65,19 +65,19 @@ def train(config: DQNConfig) -> dict[str, Any]:
             device=device,
             learning_rate=config.learning_rate,
             gamma=config.gamma,
-            random_exploration_steps=config.random_exploration_steps,
+            initial_random_steps=config.initial_random_steps,
             epsilon_start=config.epsilon_start,
             epsilon_end=config.epsilon_end,
             epsilon_decay=config.epsilon_decay,
             buffer_size=config.buffer_size,
             batch_size=config.batch_size,
-            target_update_freq=config.target_update_freq,
+            target_update_interval_updates=config.target_update_interval_updates,
             use_per=config.use_per,
             per_alpha=config.per_alpha,
             per_beta_start=config.per_beta_start,
-            per_beta_frames=config.per_beta_frames,
-            soft_update=config.soft_update,
-            tau=config.tau,
+            per_beta_updates=config.per_beta_updates,
+            use_soft_target_update=config.use_soft_target_update,
+            soft_target_update_tau=config.soft_target_update_tau,
             frame_stack=config.frame_stack,
             optimizer_name=config.optimizer_name,
             rmsprop_alpha=config.rmsprop_alpha,
@@ -175,7 +175,7 @@ def train(config: DQNConfig) -> dict[str, Any]:
                 if next_eval_step is not None:
                     while current_step >= next_eval_step:
                         run_evaluation(next_eval_step)
-                        next_eval_step += config.eval_interval_steps
+                        next_eval_step += config.eval_interval_env_steps
 
                 if current_step >= config.max_steps:
                     stop_training = True
@@ -212,7 +212,7 @@ def train(config: DQNConfig) -> dict[str, Any]:
                 )
                 agent.save(checkpoint_path)
 
-            if next_eval_step is None and episode % config.eval_freq == 0:
+            if next_eval_step is None and episode % config.eval_interval_episodes == 0:
                 run_evaluation(stats.total_steps)
 
             if stop_training:
@@ -335,27 +335,20 @@ def _should_train(agent: DQNAgent, config: DQNConfig, training_start_step: int) 
     )
 
 
-def _resolve_training_start_step(config: DQNConfig) -> int:
-    training_start_step = config.learning_starts
-    if config.align_training_start_with_random_exploration:
-        training_start_step = max(training_start_step, config.random_exploration_steps)
-    return training_start_step
-
-
 def _next_eval_step(
     config: DQNConfig,
     current_total_steps: int,
     logger: TrainingLogger,
 ) -> int | None:
-    if config.eval_interval_steps <= 0:
+    if config.eval_interval_env_steps <= 0:
         return None
 
-    next_eval_step = config.eval_interval_steps
+    next_eval_step = config.eval_interval_env_steps
     if logger.eval_steps:
-        next_eval_step = logger.eval_steps[-1] + config.eval_interval_steps
+        next_eval_step = logger.eval_steps[-1] + config.eval_interval_env_steps
 
     while next_eval_step <= current_total_steps:
-        next_eval_step += config.eval_interval_steps
+        next_eval_step += config.eval_interval_env_steps
     return next_eval_step
 
 
