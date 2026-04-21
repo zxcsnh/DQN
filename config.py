@@ -54,11 +54,10 @@ class DQNConfig:
     # Only used when use_soft_target_update=True.
     soft_target_update_tau: float = 0.005
 
-    # Checkpointing and logging.
+    # Model saving and logging.
     save_dir: str = "models"
     save_freq: int = 100
     log_dir: str = "runs"
-    save_latest_checkpoint_on_error: bool = True
     log_step_metrics: bool = True
     step_log_interval: int = 1_000
     step_log_stream: bool = True
@@ -102,7 +101,7 @@ class DQNConfig:
         return self.device
 
     def model_name_prefix(self) -> str:
-        """Convert the environment name into a filesystem-safe checkpoint prefix."""
+        """Convert the environment name into a filesystem-safe model filename prefix."""
         return self.env_name.replace("/", "_").replace(":", "_")
 
 

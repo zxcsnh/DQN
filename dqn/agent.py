@@ -179,7 +179,12 @@ class DQNAgent:
         self.memory.push(state, action, reward, next_state, terminated, truncated)
 
     def compute_loss(self, batch: Tuple) -> Dict[str, torch.Tensor]:
-        states, actions, rewards, next_states, terminated, _truncated = batch
+        states, actions, rewards, next_states, terminated, truncated = batch
+
+        # Only true MDP termination should stop bootstrapping. Time-limit or wrapper
+        # truncation still ends the sampled episode boundary, but does not zero the
+        # Bellman target in the current training protocol.
+        _ = truncated
 
         states = self._to_device_tensor(states)
         actions = self._to_device_tensor(actions, dtype=torch.long)
@@ -339,15 +344,15 @@ class DQNAgent:
         print(f"Model saved to {path}")
 
     def load(self, path: str) -> None:
-        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
-        policy_state = checkpoint.get("policy_net")
+        artifact = torch.load(path, map_location=self.device, weights_only=False)
+        policy_state = artifact.get("policy_net")
         if policy_state is None:
-            policy_state = checkpoint.get("model_state_dict")
+            policy_state = artifact.get("model_state_dict")
         if policy_state is None:
             raise ValueError(f"File does not contain model weights: {path}")
 
         self.policy_net.load_state_dict(policy_state)
-        target_state = checkpoint.get("target_net")
+        target_state = artifact.get("target_net")
         if target_state is None:
             self.target_net.load_state_dict(self.policy_net.state_dict())
         else:

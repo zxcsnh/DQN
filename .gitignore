@@ -10,3 +10,5 @@ videos/
 models/
 # Virtual environments
 .venv
+CLAUDE.md
+.claude/

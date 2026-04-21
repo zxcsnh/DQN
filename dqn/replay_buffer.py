@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import random
-from collections import deque
 from typing import Optional, Tuple
 
 import numpy as np
@@ -64,15 +63,13 @@ class ReplayBuffer:
         self.size = 0
 
         # 只保存每个环境状态的“最新一帧”，按需重建 frame stack。
-        self.frames: dict[int, np.ndarray] = {}
-        self.frame_queue: deque[int] = deque()
+        self.frame_capacity = capacity + frame_stack + 1
+        self.frames: np.ndarray | None = None
+        self.frame_ids = np.full(self.frame_capacity, -1, dtype=np.int64)
         self.next_state_index = 0
         self.current_state_idx: Optional[int] = None
         self.current_episode_start_idx: Optional[int] = None
-
-        if seed is not None:
-            random.seed(seed)
-            np.random.seed(seed)
+        self.rng = random.Random(seed)
 
     def start_episode(self, initial_state: np.ndarray) -> None:
         """在每个 episode reset 后注册初始观测。"""
@@ -118,7 +115,7 @@ class ReplayBuffer:
         if batch_size > self.size:
             raise ValueError("batch_size cannot exceed replay buffer size.")
 
-        indices = np.array(random.sample(range(self.size), batch_size), dtype=np.int64)
+        indices = np.array(self.rng.sample(range(self.size), batch_size), dtype=np.int64)
         return self._build_batch(indices)
 
     def sample_tensors(
@@ -129,7 +126,7 @@ class ReplayBuffer:
         if batch_size > self.size:
             raise ValueError("batch_size cannot exceed replay buffer size.")
 
-        indices = np.array(random.sample(range(self.size), batch_size), dtype=np.int64)
+        indices = np.array(self.rng.sample(range(self.size), batch_size), dtype=np.int64)
         return self._build_batch_tensors(indices, device=device)
 
     def __len__(self) -> int:
@@ -161,8 +158,15 @@ class ReplayBuffer:
     def _store_frame(self, state: np.ndarray) -> int:
         latest_frame = self._extract_latest_frame(state)
         state_idx = self.next_state_index
-        self.frames[state_idx] = latest_frame
-        self.frame_queue.append(state_idx)
+        if self.frames is None:
+            self.frames = np.empty(
+                (self.frame_capacity, *latest_frame.shape),
+                dtype=np.uint8,
+            )
+
+        frame_slot = state_idx % self.frame_capacity
+        self.frames[frame_slot] = latest_frame
+        self.frame_ids[frame_slot] = state_idx
         self.next_state_index += 1
         return state_idx
 
@@ -173,16 +177,17 @@ class ReplayBuffer:
         self,
         slots: np.ndarray,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        batch_size = int(len(slots))
-        frame_shape = self._frame_shape()
-        states = np.empty((batch_size, self.frame_stack, *frame_shape), dtype=np.uint8)
-        next_states = np.empty_like(states)
+        state_indices = self.state_indices[slots].astype(np.int64, copy=False)
+        episode_start_indices = self.episode_start_indices[slots].astype(
+            np.int64, copy=False
+        )
 
-        for batch_idx, slot in enumerate(slots):
-            state_idx = int(self.state_indices[slot])
-            episode_start_idx = int(self.episode_start_indices[slot])
-            self._fill_state_array(states[batch_idx], state_idx, episode_start_idx)
-            self._fill_state_array(next_states[batch_idx], state_idx + 1, episode_start_idx)
+        states = self._gather_frames(
+            self._stack_frame_indices(state_indices, episode_start_indices)
+        )
+        next_states = self._gather_frames(
+            self._stack_frame_indices(state_indices + 1, episode_start_indices)
+        )
 
         return (
             states,
@@ -211,9 +216,11 @@ class ReplayBuffer:
         )
 
     def _build_state(self, state_idx: int, episode_start_idx: int) -> np.ndarray:
-        state = np.empty((self.frame_stack, *self._frame_shape()), dtype=np.uint8)
-        self._fill_state_array(state, state_idx, episode_start_idx)
-        return state
+        frame_indices = self._stack_frame_indices(
+            np.array([state_idx], dtype=np.int64),
+            np.array([episode_start_idx], dtype=np.int64),
+        )
+        return self._gather_frames(frame_indices)[0]
 
     def _fill_state_array(
         self,
@@ -221,25 +228,12 @@ class ReplayBuffer:
         state_idx: int,
         episode_start_idx: int,
     ) -> None:
-        start_idx = max(episode_start_idx, state_idx - self.frame_stack + 1)
-        if start_idx > state_idx:
-            raise ValueError("Failed to reconstruct stacked observation from replay buffer.")
-
-        first_frame = self.frames[start_idx]
-        frame_count = state_idx - start_idx + 1
-        pad_count = self.frame_stack - frame_count
-        if pad_count > 0:
-            output[:pad_count] = first_frame
-
-        output_idx = pad_count
-        for idx in range(start_idx, state_idx + 1):
-            output[output_idx] = self.frames[idx]
-            output_idx += 1
+        output[...] = self._build_state(state_idx, episode_start_idx)
 
     def _frame_shape(self) -> tuple[int, ...]:
-        if not self.frames:
+        if self.frames is None:
             raise ValueError("Replay buffer has no frames to infer observation shape from.")
-        return next(iter(self.frames.values())).shape
+        return tuple(self.frames.shape[1:])
 
     @staticmethod
     def _array_to_tensor(
@@ -258,19 +252,34 @@ class ReplayBuffer:
         return tensor
 
     def _prune_frames(self) -> None:
-        if self.size == 0:
-            return
+        # The frame ring buffer is sized to retain all history needed by the
+        # oldest transition still present in replay, so no explicit pruning is
+        # required here.
+        return
 
-        oldest_slot = self.position if self.size == self.capacity else 0
-        oldest_state_idx = int(self.state_indices[oldest_slot])
-        oldest_episode_start_idx = int(self.episode_start_indices[oldest_slot])
-        min_required_idx = max(
-            oldest_episode_start_idx, oldest_state_idx - self.frame_stack + 1
-        )
+    def _stack_frame_indices(
+        self,
+        state_indices: np.ndarray,
+        episode_start_indices: np.ndarray,
+    ) -> np.ndarray:
+        offsets = np.arange(self.frame_stack, dtype=np.int64) - (self.frame_stack - 1)
+        frame_indices = state_indices[:, None] + offsets[None, :]
+        np.maximum(frame_indices, episode_start_indices[:, None], out=frame_indices)
+        return frame_indices
 
-        while self.frame_queue and self.frame_queue[0] < min_required_idx:
-            idx = self.frame_queue.popleft()
-            del self.frames[idx]
+    def _gather_frames(self, frame_indices: np.ndarray) -> np.ndarray:
+        if self.frames is None:
+            raise ValueError("Replay buffer has no frames to gather.")
+
+        ring_indices = np.mod(frame_indices, self.frame_capacity)
+        available_frame_ids = self.frame_ids[ring_indices]
+        if not np.all(available_frame_ids == frame_indices):
+            raise RuntimeError(
+                "Replay buffer frame history was overwritten before batch reconstruction."
+            )
+
+        gathered = self.frames[ring_indices]
+        return np.ascontiguousarray(gathered)
 
     @staticmethod
     def _extract_latest_frame(state: np.ndarray) -> np.ndarray:
@@ -290,14 +299,14 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         frame_stack: int = 4,
         alpha: float = 0.6,
         beta_start: float = 0.4,
-        beta_frames: int = 100000,
+        beta_updates: int = 100000,
         seed: Optional[int] = None,
     ):
         super().__init__(capacity=capacity, frame_stack=frame_stack, seed=seed)
         self.alpha = alpha
         self.beta_start = beta_start
-        self.beta_frames = beta_frames
-        self.frame = 0
+        self.beta_updates = max(1, beta_updates)
+        self.sample_updates_done = 0
         self.max_priority = 1.0
         self.priorities = np.zeros(capacity, dtype=np.float32)
         self.tree = SumTree(capacity)
@@ -320,15 +329,18 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         if batch_size > self.size:
             raise ValueError("batch_size cannot exceed replay buffer size.")
 
-        self.frame += 1
+        self.sample_updates_done += 1
         beta = min(
             1.0,
-            self.beta_start + (1.0 - self.beta_start) * self.frame / self.beta_frames,
+            self.beta_start
+            + (1.0 - self.beta_start)
+            * self.sample_updates_done
+            / self.beta_updates,
         )
 
         total_priority = self.tree.total()
         if total_priority <= 0:
-            slots = np.array(random.sample(range(self.size), batch_size), dtype=np.int64)
+            slots = np.array(self.rng.sample(range(self.size), batch_size), dtype=np.int64)
             probs = np.full(batch_size, 1.0 / self.size, dtype=np.float32)
         else:
             segment = total_priority / batch_size
@@ -337,10 +349,10 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             for idx in range(batch_size):
                 left = segment * idx
                 right = segment * (idx + 1)
-                mass = random.uniform(left, right)
+                mass = self.rng.uniform(left, right)
                 slot = self.tree.get(mass)
                 while slot >= self.size:
-                    mass = random.uniform(0.0, total_priority)
+                    mass = self.rng.uniform(0.0, total_priority)
                     slot = self.tree.get(mass)
                 sampled_slots.append(slot)
                 probs.append(self.priorities[slot] / total_priority)
@@ -362,15 +374,18 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         if batch_size > self.size:
             raise ValueError("batch_size cannot exceed replay buffer size.")
 
-        self.frame += 1
+        self.sample_updates_done += 1
         beta = min(
             1.0,
-            self.beta_start + (1.0 - self.beta_start) * self.frame / self.beta_frames,
+            self.beta_start
+            + (1.0 - self.beta_start)
+            * self.sample_updates_done
+            / self.beta_updates,
         )
 
         total_priority = self.tree.total()
         if total_priority <= 0:
-            slots = np.array(random.sample(range(self.size), batch_size), dtype=np.int64)
+            slots = np.array(self.rng.sample(range(self.size), batch_size), dtype=np.int64)
             probs = np.full(batch_size, 1.0 / self.size, dtype=np.float32)
         else:
             segment = total_priority / batch_size
@@ -379,10 +394,10 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             for idx in range(batch_size):
                 left = segment * idx
                 right = segment * (idx + 1)
-                mass = random.uniform(left, right)
+                mass = self.rng.uniform(left, right)
                 slot = self.tree.get(mass)
                 while slot >= self.size:
-                    mass = random.uniform(0.0, total_priority)
+                    mass = self.rng.uniform(0.0, total_priority)
                     slot = self.tree.get(mass)
                 sampled_slots.append(slot)
                 probs.append(self.priorities[slot] / total_priority)

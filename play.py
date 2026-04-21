@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 
 import numpy as np
@@ -17,15 +18,15 @@ def infer_model_metadata(
     default_channels: int,
     default_frame_size: tuple[int, int],
 ) -> tuple[int, tuple[int, int]]:
-    """优先从 checkpoint 推断输入配置，失败时回退到默认值。"""
+    """优先从已保存模型推断输入配置，失败时回退到默认值。"""
     if not model_path or not os.path.exists(model_path):
         return default_channels, default_frame_size
 
     try:
         import torch
 
-        checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
-        model_config = checkpoint.get("model_config", {})
+        artifact = torch.load(model_path, map_location="cpu", weights_only=False)
+        model_config = artifact.get("model_config", {})
 
         input_channels = int(model_config.get("input_channels", default_channels))
         input_shape = model_config.get("input_shape", default_frame_size)
@@ -34,14 +35,14 @@ def infer_model_metadata(
         if not (isinstance(input_shape, tuple) and len(input_shape) == 2):
             input_shape = default_frame_size
 
-        policy_state = checkpoint.get("policy_net", {})
+        policy_state = artifact.get("policy_net", {})
         conv1_weight = policy_state.get("conv1.weight")
         if conv1_weight is not None and conv1_weight.ndim == 4:
             input_channels = int(conv1_weight.shape[1])
 
         return input_channels, tuple(int(v) for v in input_shape)
     except Exception as exc:
-        print(f"Warning: failed to infer model metadata from checkpoint: {exc}")
+        print(f"Warning: failed to infer model metadata from saved model: {exc}")
 
     return default_channels, default_frame_size
 
@@ -57,6 +58,9 @@ def play(
     frame_size: tuple[int, int] = (84, 84),
 ):
     """运行若干回合，用于观察训练后策略的表现。"""
+    if model_path is not None and not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file does not exist: {model_path}")
+
     input_channels, input_shape = infer_model_metadata(
         model_path, frame_stack, frame_size
     )
@@ -144,6 +148,9 @@ def record_video(
     """把智能体的行为录制成 mp4 视频。"""
     import cv2
 
+    if model_path is not None and not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file does not exist: {model_path}")
+
     os.makedirs(output_dir, exist_ok=True)
     input_channels, input_shape = infer_model_metadata(
         model_path, frame_stack, frame_size
@@ -205,9 +212,24 @@ def record_video(
     env.close()
 
 
+def resolve_default_model_path(config: DQNConfig) -> str | None:
+    default_model_path = os.path.join(
+        config.save_dir, f"{config.model_name_prefix()}_ep{config.save_freq}.pth"
+    )
+    if os.path.exists(default_model_path):
+        print(f"Using saved model: {default_model_path}")
+        return default_model_path
+
+    print(
+        "Warning: default saved model not found. Playback will use the untrained policy network.",
+        file=sys.stderr,
+    )
+    return None
+
+
 def main():
     config = DQNConfig()
-    model_path = os.path.join(config.save_dir, f"{config.model_name_prefix()}_best.pth")
+    model_path = resolve_default_model_path(config)
 
     if config.save_video:
         record_video(

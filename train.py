@@ -31,6 +31,8 @@ def train(config: DQNConfig) -> dict[str, Any]:
     logger = None
 
     try:
+        # Training uses the optimization protocol: reward clipping may be enabled
+        # and life loss can be treated as an episode boundary.
         env = make_env(
             config.env_name,
             frame_size=config.frame_size,
@@ -41,6 +43,8 @@ def train(config: DQNConfig) -> dict[str, Any]:
             seed=config.seed,
             terminal_on_life_loss=config.terminal_on_life_loss,
         )
+        # Evaluation uses the reporting protocol: unclipped rewards and no
+        # life-loss termination, matching playback semantics.
         eval_env = make_env(
             config.env_name,
             frame_size=config.frame_size,
@@ -123,8 +127,6 @@ def train(config: DQNConfig) -> dict[str, Any]:
 
             if eval_reward > stats.best_eval_reward:
                 stats.best_eval_reward = eval_reward
-                best_path = os.path.join(config.save_dir, f"{model_prefix}_best.pth")
-                agent.save(best_path)
 
         episode = agent.episodes_done
         while True:
@@ -207,10 +209,10 @@ def train(config: DQNConfig) -> dict[str, Any]:
             )
 
             if episode % config.save_freq == 0:
-                checkpoint_path = os.path.join(
+                periodic_model_path = os.path.join(
                     config.save_dir, f"{model_prefix}_ep{episode}.pth"
                 )
-                agent.save(checkpoint_path)
+                agent.save(periodic_model_path)
 
             if next_eval_step is None and episode % config.eval_interval_episodes == 0:
                 run_evaluation(stats.total_steps)
@@ -225,9 +227,6 @@ def train(config: DQNConfig) -> dict[str, Any]:
             )
             if needs_final_eval:
                 run_evaluation(stats.total_steps)
-
-        final_path = os.path.join(config.save_dir, f"{model_prefix}_final.pth")
-        agent.save(final_path)
 
         logger.save_metrics(os.path.join(config.log_dir, "metrics.json"))
         logger.plot_training_curves(os.path.join(config.log_dir, "training_curves.png"))
@@ -249,7 +248,15 @@ def train(config: DQNConfig) -> dict[str, Any]:
             "final_loss": last_avg_loss,
             "eval_steps": logger.eval_steps,
             "eval_rewards": logger.eval_rewards,
-            "checkpoint_prefix": model_prefix,
+            "train_clip_reward": config.clip_reward,
+            "train_terminal_on_life_loss": config.terminal_on_life_loss,
+            "eval_clip_reward": False,
+            "eval_terminal_on_life_loss": False,
+            "eval_epsilon": config.eval_epsilon,
+            "eval_max_episode_steps": config.eval_max_episode_steps,
+            "target_bootstrap_mask": "terminated_only",
+            "protocol_note": "Train may use clipped rewards and life-loss termination; eval/play use unclipped rewards without life-loss termination.",
+            "model_prefix": model_prefix,
         }
         with open(
             os.path.join(config.log_dir, "run_summary.json"), "w", encoding="utf-8"
@@ -262,16 +269,6 @@ def train(config: DQNConfig) -> dict[str, Any]:
         print(f"Model saved to: {config.save_dir}")
         return summary
     except Exception:
-        if (
-            config.save_latest_checkpoint_on_error
-            and agent is not None
-            and config.save_dir
-        ):
-            error_path = os.path.join(config.save_dir, f"{model_prefix}_error.pth")
-            try:
-                agent.save(error_path)
-            except Exception as save_exc:
-                print(f"Warning: failed to save error checkpoint: {save_exc}")
         raise
     finally:
         if logger is not None:
