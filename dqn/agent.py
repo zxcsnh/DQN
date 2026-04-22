@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 import numpy as np
 import torch
@@ -11,7 +11,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from .network import DQNCNN
-from .replay_buffer import PrioritizedReplayBuffer, ReplayBuffer
+from .replay_buffer import PrioritizedReplayBuffer, ReplayBatch, ReplayBuffer
 
 
 class DQNAgent:
@@ -158,9 +158,9 @@ class DQNAgent:
             q_values = self.policy_net(state_tensor)
             return int(q_values.argmax(dim=1).item())
 
-    def begin_episode(self, initial_state: np.ndarray) -> None:
+    def begin_episode(self, initial_state: np.ndarray, stream_id: int = 0) -> None:
         """Notify the replay buffer that a new episode has started."""
-        self.memory.start_episode(initial_state)
+        self.memory.start_episode(initial_state, stream_id=stream_id)
 
     def on_env_step(self) -> None:
         """Record an environment interaction and update epsilon."""
@@ -175,22 +175,29 @@ class DQNAgent:
         next_state: np.ndarray,
         terminated: bool,
         truncated: bool,
+        stream_id: int = 0,
     ) -> None:
-        self.memory.push(state, action, reward, next_state, terminated, truncated)
+        self.memory.push(
+            state,
+            action,
+            reward,
+            next_state,
+            terminated,
+            truncated,
+            stream_id=stream_id,
+        )
 
-    def compute_loss(self, batch: Tuple) -> Dict[str, torch.Tensor]:
-        states, actions, rewards, next_states, terminated, truncated = batch
-
+    def compute_loss(self, batch: ReplayBatch) -> Dict[str, torch.Tensor]:
         # Only true MDP termination should stop bootstrapping. Time-limit or wrapper
         # truncation still ends the sampled episode boundary, but does not zero the
         # Bellman target in the current training protocol.
-        _ = truncated
+        _ = batch.truncated
 
-        states = self._to_device_tensor(states)
-        actions = self._to_device_tensor(actions, dtype=torch.long)
-        rewards = self._to_device_tensor(rewards, dtype=torch.float32)
-        next_states = self._to_device_tensor(next_states)
-        terminated = self._to_device_tensor(terminated, dtype=torch.float32)
+        states = self._to_device_tensor(batch.states)
+        actions = self._to_device_tensor(batch.actions, dtype=torch.long)
+        rewards = self._to_device_tensor(batch.rewards, dtype=torch.float32)
+        next_states = self._to_device_tensor(batch.next_states)
+        terminated = self._to_device_tensor(batch.terminated, dtype=torch.float32)
 
         current_q = self.policy_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
 
@@ -243,40 +250,16 @@ class DQNAgent:
         if self.replay_sample_torch_fastpath:
             sample_fn = getattr(self.memory, "sample_tensors", None)
 
-        if self.use_per and sample_fn is not None:
-            (
-                states,
-                actions,
-                rewards,
-                next_states,
-                terminated,
-                truncated,
-                indices,
-                weights,
-            ) = sample_fn(self.batch_size, device=self.device)
-            batch = (states, actions, rewards, next_states, terminated, truncated)
-            priority_indices = indices.detach().cpu().numpy()
-        elif self.use_per:
-            (
-                states,
-                actions,
-                rewards,
-                next_states,
-                terminated,
-                truncated,
-                indices,
-                weights,
-            ) = self.memory.sample(self.batch_size)
-            batch = (states, actions, rewards, next_states, terminated, truncated)
-            weights = self._to_device_tensor(weights, dtype=torch.float32)
-            priority_indices = indices
-        elif sample_fn is not None:
+        if sample_fn is not None:
             batch = sample_fn(self.batch_size, device=self.device)
         else:
             batch = self.memory.sample(self.batch_size)
 
         loss_info = self.compute_loss(batch)
         if self.use_per:
+            if batch.weights is None or batch.indices is None:
+                raise ValueError("PER batches must include importance weights and indices.")
+            weights = self._to_device_tensor(batch.weights, dtype=torch.float32)
             loss = (loss_info["per_sample_loss"] * weights).mean()
         else:
             loss = loss_info["loss"]
@@ -289,6 +272,10 @@ class DQNAgent:
 
         if self.use_per:
             priorities = loss_info["td_errors"].detach().abs().cpu().numpy() + 1e-6
+            if isinstance(batch.indices, torch.Tensor):
+                priority_indices = batch.indices.detach().cpu().numpy()
+            else:
+                priority_indices = batch.indices
             self.memory.update_priorities(priority_indices, priorities)
 
         if self.use_soft_target_update:

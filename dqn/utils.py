@@ -36,9 +36,15 @@ class TrainingLogger:
         self.avg_rewards: List[float] = []
         self.eval_rewards: List[float] = []
         self.eval_steps: List[int] = []
+        self.keep_step_history_in_memory = not self.step_log_stream
         self.global_steps: List[int] = []
         self.step_losses: List[float] = []
         self.step_epsilons: List[float] = []
+
+        if not self.keep_step_history_in_memory:
+            self.global_steps = []
+            self.step_losses = []
+            self.step_epsilons = []
 
         # Keep per-update losses only within one episode for episode-level loss stats.
         self.current_episode_loss: List[float] = []
@@ -184,9 +190,10 @@ class TrainingLogger:
         avg_loss = self._step_accum_loss_sum / self._step_accum_count
         avg_epsilon = self._step_accum_epsilon_sum / self._step_accum_count
 
-        self.global_steps.append(self._step_accum_last_step)
-        self.step_losses.append(float(avg_loss))
-        self.step_epsilons.append(float(avg_epsilon))
+        if self.keep_step_history_in_memory:
+            self.global_steps.append(self._step_accum_last_step)
+            self.step_losses.append(float(avg_loss))
+            self.step_epsilons.append(float(avg_epsilon))
 
         if self._step_stream_fp is not None:
             record = {

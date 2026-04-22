@@ -214,7 +214,8 @@ def record_video(
 
 def resolve_default_model_path(config: DQNConfig) -> str | None:
     default_model_path = os.path.join(
-        config.save_dir, f"{config.model_name_prefix()}_ep{config.save_freq}.pth"
+        config.logging.save_dir,
+        f"{config.model_name_prefix()}_ep{config.logging.save_freq}.pth",
     )
     if os.path.exists(default_model_path):
         print(f"Using saved model: {default_model_path}")
@@ -229,25 +230,29 @@ def resolve_default_model_path(config: DQNConfig) -> str | None:
 
 def main():
     config = DQNConfig()
+    core = config.core
+    evaluation = config.evaluation
+    preprocess = config.preprocess
+    playback = config.playback
     model_path = resolve_default_model_path(config)
 
-    if config.save_video:
+    if playback.save_video:
         record_video(
-            env_name=config.env_name,
+            env_name=core.env_name,
             model_path=model_path,
-            num_episodes=config.eval_episodes,
-            output_dir=config.video_dir,
-            frame_stack=config.frame_stack,
-            frame_size=config.frame_size,
+            num_episodes=evaluation.eval_episodes,
+            output_dir=playback.video_dir,
+            frame_stack=preprocess.frame_stack,
+            frame_size=preprocess.frame_size,
         )
     else:
         play(
-            env_name=config.env_name,
+            env_name=core.env_name,
             model_path=model_path,
-            num_episodes=config.eval_episodes,
-            render=config.render,
-            frame_stack=config.frame_stack,
-            frame_size=config.frame_size,
+            num_episodes=evaluation.eval_episodes,
+            render=playback.render,
+            frame_stack=preprocess.frame_stack,
+            frame_size=preprocess.frame_size,
         )
 
 

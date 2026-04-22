@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass, field, replace
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from itertools import product
+from typing import Any
+
+import multiprocessing as mp
 
 from config import DQNConfig
 from train import train
@@ -26,14 +30,20 @@ class ExperimentSettings:
     seeds: list[int] = field(default_factory=lambda: [42])
     variants: list[str] = field(default_factory=lambda: ["dqn", "per"])
     output_root: str = "experiments"
+    max_workers: int = 1
 
     def __post_init__(self):
+        self.max_workers = max(1, int(self.max_workers))
         invalid_variants = [variant for variant in self.variants if variant not in VARIANT_LABELS]
         if invalid_variants:
             raise ValueError(
                 "Unsupported variants: "
                 f"{invalid_variants}. Expected one of {list(VARIANT_LABELS)}."
             )
+        run_keys = list(self.iter_runs())
+        if len(run_keys) != len(set(run_keys)):
+            raise ValueError("Duplicate (env, variant, seed) runs are not allowed.")
+
 
     def manifest_path(self) -> str:
         return os.path.join(self.output_root, "experiment_manifest.json")
@@ -44,11 +54,79 @@ class ExperimentSettings:
             "seeds": self.seeds,
             "variants": self.variants,
             "output_root": self.output_root,
+            "max_workers": self.max_workers,
         }
 
     def iter_runs(self):
         for env_name, variant, seed in product(self.envs, self.variants, self.seeds):
             yield env_name, variant, seed
+
+
+@dataclass(frozen=True)
+class RunSpec:
+    env_name: str
+    variant: str
+    seed: int
+
+
+def _run_single_experiment(
+    base_config: DQNConfig,
+    settings: ExperimentSettings,
+    run_spec: RunSpec,
+) -> tuple[DQNConfig, dict[str, Any]]:
+    config = build_run_config(
+        base_config=base_config,
+        env_name=run_spec.env_name,
+        seed=run_spec.seed,
+        variant=run_spec.variant,
+        settings=settings,
+    )
+    summary = train(config)
+    return config, summary
+
+
+def _run_label(run_spec: RunSpec) -> str:
+    return (
+        f"{VARIANT_LABELS[run_spec.variant]} on {run_spec.env_name} "
+        f"with seed {run_spec.seed}"
+    )
+
+
+def _run_specs(settings: ExperimentSettings) -> list[RunSpec]:
+    return [RunSpec(env_name, variant, seed) for env_name, variant, seed in settings.iter_runs()]
+
+
+def _print_run_header(index: int, total_runs: int, run_spec: RunSpec) -> None:
+    print(f"\n[{index}/{total_runs}] Running {_run_label(run_spec)}")
+
+
+def _execute_runs(settings: ExperimentSettings) -> list[tuple[DQNConfig, dict[str, Any]]]:
+    run_specs = _run_specs(settings)
+    total_runs = len(run_specs)
+    if settings.max_workers == 1:
+        results = []
+        for run_index, run_spec in enumerate(run_specs, start=1):
+            _print_run_header(run_index, total_runs, run_spec)
+            results.append(_run_single_experiment(settings.base_config, settings, run_spec))
+        return results
+
+    results_by_spec: dict[RunSpec, tuple[DQNConfig, dict[str, Any]]] = {}
+    with ProcessPoolExecutor(
+        max_workers=settings.max_workers,
+        mp_context=mp.get_context("spawn"),
+    ) as executor:
+        future_to_spec = {
+            executor.submit(_run_single_experiment, settings.base_config, settings, run_spec): run_spec
+            for run_spec in run_specs
+        }
+        completed = 0
+        for future in as_completed(future_to_spec):
+            run_spec = future_to_spec[future]
+            completed += 1
+            print(f"\n[{completed}/{total_runs}] Finished {_run_label(run_spec)}")
+            results_by_spec[run_spec] = future.result()
+
+    return [results_by_spec[run_spec] for run_spec in run_specs]
 
 
 def build_run_config(
@@ -63,14 +141,13 @@ def build_run_config(
     env_slug = env_name.replace("/", "_").replace(":", "_")
     run_dir = os.path.join(settings.output_root, env_slug, variant_name, f"seed_{seed}")
 
-    return replace(
-        base_config,
-        env_name=env_name,
-        seed=seed,
-        use_per=(variant == "per"),
-        save_dir=os.path.join(run_dir, "models"),
-        log_dir=os.path.join(run_dir, "logs"),
-    )
+    config = base_config.clone()
+    config.core.env_name = env_name
+    config.core.seed = seed
+    config.replay.use_per = variant == "per"
+    config.logging.save_dir = os.path.join(run_dir, "models")
+    config.logging.log_dir = os.path.join(run_dir, "logs")
+    return config
 
 
 def create_manifest(settings: ExperimentSettings, base_config: DQNConfig) -> dict:
@@ -78,23 +155,23 @@ def create_manifest(settings: ExperimentSettings, base_config: DQNConfig) -> dic
         "envs": settings.envs,
         "seeds": settings.seeds,
         "variants": settings.variants,
-        "base_config": asdict(base_config),
+        "base_config": base_config.to_flat_dict(),
         "experiment_settings": settings.experiment_metadata(),
         "runs": [],
     }
 
 
 def append_run_record(manifest: dict, config: DQNConfig, summary: dict) -> None:
-    variant_label = VARIANT_LABELS["per"] if config.use_per else VARIANT_LABELS["dqn"]
+    variant_label = VARIANT_LABELS["per"] if config.replay.use_per else VARIANT_LABELS["dqn"]
     manifest["runs"].append(
         {
-            "env_name": config.env_name,
+            "env_name": config.core.env_name,
             "variant": variant_label,
-            "seed": config.seed,
-            "run_dir": os.path.dirname(config.save_dir),
-            "config_path": os.path.join(config.log_dir, "config.json"),
-            "summary_path": os.path.join(config.log_dir, "run_summary.json"),
-            "metrics_path": os.path.join(config.log_dir, "metrics.json"),
+            "seed": config.core.seed,
+            "run_dir": os.path.dirname(config.logging.save_dir),
+            "config_path": os.path.join(config.logging.log_dir, "config.json"),
+            "summary_path": os.path.join(config.logging.log_dir, "run_summary.json"),
+            "metrics_path": os.path.join(config.logging.log_dir, "metrics.json"),
             "summary": summary,
         }
     )
@@ -112,30 +189,13 @@ def main():
         envs=["ALE/Pong-v5"],
         seeds=[42],
         variants=["dqn", "per"],
+        max_workers=1,
     )
 
     os.makedirs(settings.output_root, exist_ok=True)
     manifest = create_manifest(settings, settings.base_config)
 
-    total_runs = len(settings.envs) * len(settings.variants) * len(settings.seeds)
-    run_index = 0
-
-    for env_name, variant, seed in settings.iter_runs():
-        run_index += 1
-        config = build_run_config(
-            base_config=settings.base_config,
-            env_name=env_name,
-            seed=seed,
-            variant=variant,
-            settings=settings,
-        )
-        variant_label = VARIANT_LABELS[variant]
-        print(
-            f"\n[{run_index}/{total_runs}] Running {variant_label} on "
-            f"{env_name} with seed {seed}"
-        )
-        summary = train(config)
-
+    for config, summary in _execute_runs(settings):
         append_run_record(manifest, config, summary)
         save_manifest(manifest, settings.manifest_path())
 
@@ -144,4 +204,5 @@ def main():
 
 
 if __name__ == "__main__":
+    mp.freeze_support()
     main()

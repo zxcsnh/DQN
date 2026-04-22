@@ -3,10 +3,23 @@
 from __future__ import annotations
 
 import random
-from typing import Optional, Tuple
+from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 import torch
+
+
+@dataclass
+class ReplayBatch:
+    states: np.ndarray | torch.Tensor
+    actions: np.ndarray | torch.Tensor
+    rewards: np.ndarray | torch.Tensor
+    next_states: np.ndarray | torch.Tensor
+    terminated: np.ndarray | torch.Tensor
+    truncated: np.ndarray | torch.Tensor
+    indices: np.ndarray | torch.Tensor | None = None
+    weights: np.ndarray | torch.Tensor | None = None
 
 
 class SumTree:
@@ -67,15 +80,48 @@ class ReplayBuffer:
         self.frames: np.ndarray | None = None
         self.frame_ids = np.full(self.frame_capacity, -1, dtype=np.int64)
         self.next_state_index = 0
-        self.current_state_idx: Optional[int] = None
-        self.current_episode_start_idx: Optional[int] = None
+        self.stream_state: dict[int, tuple[int, int] | None] = {0: None}
         self.rng = random.Random(seed)
 
-    def start_episode(self, initial_state: np.ndarray) -> None:
+    def start_episode(self, initial_state: np.ndarray, stream_id: int = 0) -> None:
         """在每个 episode reset 后注册初始观测。"""
         state_idx = self._store_frame(initial_state)
-        self.current_state_idx = state_idx
-        self.current_episode_start_idx = state_idx
+        self.stream_state[stream_id] = (state_idx, state_idx)
+
+    def _get_stream_state(self, stream_id: int) -> tuple[int, int] | None:
+        return self.stream_state.get(stream_id)
+
+    def _set_stream_state(self, stream_id: int, state: tuple[int, int] | None) -> None:
+        self.stream_state[stream_id] = state
+
+    def _clear_stream_state(self, stream_id: int) -> None:
+        self.stream_state[stream_id] = None
+
+    def _touch_stream(self, stream_id: int) -> None:
+        self.stream_state.setdefault(stream_id, None)
+
+    def _get_or_start_stream(self, state: np.ndarray, stream_id: int) -> tuple[int, int]:
+        self._touch_stream(stream_id)
+        stream_state = self._get_stream_state(stream_id)
+        if stream_state is None:
+            self.start_episode(state, stream_id=stream_id)
+            stream_state = self._get_stream_state(stream_id)
+            if stream_state is None:
+                raise RuntimeError("Failed to initialize replay stream state.")
+        return stream_state
+
+    def _advance_stream(
+        self,
+        stream_id: int,
+        next_state_idx: int,
+        terminated: bool,
+        truncated: bool,
+        episode_start_idx: int,
+    ) -> None:
+        if terminated or truncated:
+            self._clear_stream_state(stream_id)
+            return
+        self._set_stream_state(stream_id, (next_state_idx, episode_start_idx))
 
     def push(
         self,
@@ -85,15 +131,18 @@ class ReplayBuffer:
         next_state: np.ndarray,
         terminated: bool,
         truncated: bool,
+        stream_id: int = 0,
     ):
-        if self.current_state_idx is None or self.current_episode_start_idx is None:
-            self.start_episode(state)
+        current_state_idx, episode_start_idx = self._get_or_start_stream(
+            state,
+            stream_id=stream_id,
+        )
 
         next_state_idx = self._register_next_state(next_state)
         self._store_transition(
             slot=self.position,
-            state_idx=self.current_state_idx,
-            episode_start_idx=self.current_episode_start_idx,
+            state_idx=current_state_idx,
+            episode_start_idx=episode_start_idx,
             action=action,
             reward=reward,
             terminated=terminated,
@@ -102,32 +151,32 @@ class ReplayBuffer:
 
         self.position = (self.position + 1) % self.capacity
         self.size = min(self.size + 1, self.capacity)
-
-        if terminated or truncated:
-            self.current_state_idx = None
-            self.current_episode_start_idx = None
-        else:
-            self.current_state_idx = next_state_idx
+        self._advance_stream(
+            stream_id,
+            next_state_idx=next_state_idx,
+            terminated=terminated,
+            truncated=truncated,
+            episode_start_idx=episode_start_idx,
+        )
 
         self._prune_frames()
 
-    def sample(self, batch_size: int) -> Tuple[np.ndarray, ...]:
-        if batch_size > self.size:
-            raise ValueError("batch_size cannot exceed replay buffer size.")
-
-        indices = np.array(self.rng.sample(range(self.size), batch_size), dtype=np.int64)
-        return self._build_batch(indices)
+    def sample(self, batch_size: int) -> ReplayBatch:
+        slots = self._sample_uniform_slots(batch_size)
+        return self._build_batch(slots)
 
     def sample_tensors(
         self,
         batch_size: int,
         device: str | torch.device,
-    ) -> Tuple[torch.Tensor, ...]:
+    ) -> ReplayBatch:
+        slots = self._sample_uniform_slots(batch_size)
+        return self._build_batch_tensors(slots, device=device)
+
+    def _sample_uniform_slots(self, batch_size: int) -> np.ndarray:
         if batch_size > self.size:
             raise ValueError("batch_size cannot exceed replay buffer size.")
-
-        indices = np.array(self.rng.sample(range(self.size), batch_size), dtype=np.int64)
-        return self._build_batch_tensors(indices, device=device)
+        return np.array(self.rng.sample(range(self.size), batch_size), dtype=np.int64)
 
     def __len__(self) -> int:
         return self.size
@@ -170,13 +219,13 @@ class ReplayBuffer:
         self.next_state_index += 1
         return state_idx
 
-    def _build_batch(self, slots: np.ndarray) -> Tuple[np.ndarray, ...]:
+    def _build_batch(self, slots: np.ndarray) -> ReplayBatch:
         return self._build_batch_arrays(slots)
 
     def _build_batch_arrays(
         self,
         slots: np.ndarray,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> ReplayBatch:
         state_indices = self.state_indices[slots].astype(np.int64, copy=False)
         episode_start_indices = self.episode_start_indices[slots].astype(
             np.int64, copy=False
@@ -189,30 +238,38 @@ class ReplayBuffer:
             self._stack_frame_indices(state_indices + 1, episode_start_indices)
         )
 
-        return (
-            states,
-            self.actions[slots].copy(),
-            self.rewards[slots].copy(),
-            next_states,
-            self.terminated[slots].astype(np.float32),
-            self.truncated[slots].astype(np.float32),
+        return ReplayBatch(
+            states=states,
+            actions=self.actions[slots].copy(),
+            rewards=self.rewards[slots].copy(),
+            next_states=next_states,
+            terminated=self.terminated[slots].astype(np.float32),
+            truncated=self.truncated[slots].astype(np.float32),
         )
 
     def _build_batch_tensors(
         self,
         slots: np.ndarray,
         device: str | torch.device,
-    ) -> Tuple[torch.Tensor, ...]:
-        states, actions, rewards, next_states, terminated, truncated = (
-            self._build_batch_arrays(slots)
-        )
-        return (
-            self._array_to_tensor(states, device=device),
-            self._array_to_tensor(actions, device=device, dtype=torch.long),
-            self._array_to_tensor(rewards, device=device, dtype=torch.float32),
-            self._array_to_tensor(next_states, device=device),
-            self._array_to_tensor(terminated, device=device, dtype=torch.float32),
-            self._array_to_tensor(truncated, device=device, dtype=torch.float32),
+    ) -> ReplayBatch:
+        batch = self._build_batch_arrays(slots)
+        return ReplayBatch(
+            states=self._array_to_tensor(batch.states, device=device),
+            actions=self._array_to_tensor(batch.actions, device=device, dtype=torch.long),
+            rewards=self._array_to_tensor(batch.rewards, device=device, dtype=torch.float32),
+            next_states=self._array_to_tensor(batch.next_states, device=device),
+            terminated=self._array_to_tensor(batch.terminated, device=device, dtype=torch.float32),
+            truncated=self._array_to_tensor(batch.truncated, device=device, dtype=torch.float32),
+            indices=(
+                None
+                if batch.indices is None
+                else self._array_to_tensor(batch.indices, device=device, dtype=torch.long)
+            ),
+            weights=(
+                None
+                if batch.weights is None
+                else self._array_to_tensor(batch.weights, device=device, dtype=torch.float32)
+            ),
         )
 
     def _build_state(self, state_idx: int, episode_start_idx: int) -> np.ndarray:
@@ -319,58 +376,40 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         next_state: np.ndarray,
         terminated: bool,
         truncated: bool,
+        stream_id: int = 0,
     ):
         slot = self.position
-        super().push(state, action, reward, next_state, terminated, truncated)
+        super().push(
+            state,
+            action,
+            reward,
+            next_state,
+            terminated,
+            truncated,
+            stream_id=stream_id,
+        )
         self.priorities[slot] = self.max_priority
         self.tree.update(slot, self.max_priority)
 
-    def sample(self, batch_size: int) -> Tuple:
-        if batch_size > self.size:
-            raise ValueError("batch_size cannot exceed replay buffer size.")
-
-        self.sample_updates_done += 1
-        beta = min(
-            1.0,
-            self.beta_start
-            + (1.0 - self.beta_start)
-            * self.sample_updates_done
-            / self.beta_updates,
-        )
-
-        total_priority = self.tree.total()
-        if total_priority <= 0:
-            slots = np.array(self.rng.sample(range(self.size), batch_size), dtype=np.int64)
-            probs = np.full(batch_size, 1.0 / self.size, dtype=np.float32)
-        else:
-            segment = total_priority / batch_size
-            sampled_slots = []
-            probs = []
-            for idx in range(batch_size):
-                left = segment * idx
-                right = segment * (idx + 1)
-                mass = self.rng.uniform(left, right)
-                slot = self.tree.get(mass)
-                while slot >= self.size:
-                    mass = self.rng.uniform(0.0, total_priority)
-                    slot = self.tree.get(mass)
-                sampled_slots.append(slot)
-                probs.append(self.priorities[slot] / total_priority)
-
-            slots = np.array(sampled_slots, dtype=np.int64)
-            probs = np.asarray(probs, dtype=np.float32)
-
-        weights = (self.size * probs) ** (-beta)
-        weights = weights / weights.max()
-
+    def sample(self, batch_size: int) -> ReplayBatch:
+        slots, weights = self._sample_prioritized_slots(batch_size)
         batch = self._build_batch(slots)
-        return (*batch, slots, weights.astype(np.float32))
+        batch.indices = slots
+        batch.weights = weights
+        return batch
 
     def sample_tensors(
         self,
         batch_size: int,
         device: str | torch.device,
-    ) -> Tuple[torch.Tensor, ...]:
+    ) -> ReplayBatch:
+        slots, weights = self._sample_prioritized_slots(batch_size)
+        batch = self._build_batch_tensors(slots, device=device)
+        batch.indices = self._array_to_tensor(slots, device=device, dtype=torch.long)
+        batch.weights = self._array_to_tensor(weights, device=device, dtype=torch.float32)
+        return batch
+
+    def _sample_prioritized_slots(self, batch_size: int) -> tuple[np.ndarray, np.ndarray]:
         if batch_size > self.size:
             raise ValueError("batch_size cannot exceed replay buffer size.")
 
@@ -385,12 +424,12 @@ class PrioritizedReplayBuffer(ReplayBuffer):
 
         total_priority = self.tree.total()
         if total_priority <= 0:
-            slots = np.array(self.rng.sample(range(self.size), batch_size), dtype=np.int64)
+            slots = self._sample_uniform_slots(batch_size)
             probs = np.full(batch_size, 1.0 / self.size, dtype=np.float32)
         else:
             segment = total_priority / batch_size
-            sampled_slots = []
-            probs = []
+            slots = np.empty(batch_size, dtype=np.int64)
+            probs = np.empty(batch_size, dtype=np.float32)
             for idx in range(batch_size):
                 left = segment * idx
                 right = segment * (idx + 1)
@@ -399,25 +438,16 @@ class PrioritizedReplayBuffer(ReplayBuffer):
                 while slot >= self.size:
                     mass = self.rng.uniform(0.0, total_priority)
                     slot = self.tree.get(mass)
-                sampled_slots.append(slot)
-                probs.append(self.priorities[slot] / total_priority)
-
-            slots = np.array(sampled_slots, dtype=np.int64)
-            probs = np.asarray(probs, dtype=np.float32)
+                slots[idx] = slot
+                probs[idx] = self.priorities[slot] / total_priority
 
         weights = (self.size * probs) ** (-beta)
         weights = weights / weights.max()
-
-        batch = self._build_batch_tensors(slots, device=device)
-        return (
-            *batch,
-            self._array_to_tensor(slots, device=device, dtype=torch.long),
-            self._array_to_tensor(weights.astype(np.float32), device=device, dtype=torch.float32),
-        )
+        return slots, weights.astype(np.float32)
 
     def update_priorities(self, indices: np.ndarray, priorities: np.ndarray):
-        for index, priority in zip(indices, priorities):
-            adjusted = float(max(priority, 1e-6) ** self.alpha)
-            self.priorities[index] = adjusted
-            self.tree.update(int(index), adjusted)
-            self.max_priority = max(self.max_priority, adjusted)
+        adjusted = np.maximum(priorities, 1e-6).astype(np.float32) ** self.alpha
+        self.priorities[indices] = adjusted
+        self.max_priority = max(self.max_priority, float(np.max(adjusted)))
+        for index, priority in zip(indices, adjusted, strict=False):
+            self.tree.update(int(index), float(priority))
