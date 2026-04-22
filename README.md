@@ -1,291 +1,234 @@
-# 面向低维状态空间的 DQN / PER-DQN 实验项目
+# 基于 PER-DQN 的多环境策略决策智能体研究与实现
 
-这是一个基于 PyTorch 的强化学习项目，用于在低成本环境上对比 `DQN` 与 `PER-DQN`，并为本科毕业设计中的策略决策分析提供实验基础。
+本项目使用 Python + PyTorch + Gymnasium 实现 DQN 与 PER-DQN 两种强化学习算法，并在三个环境中开展对比实验：Taxi-v3、MountainCar-v0、简化 Dinosaur Game。
 
-当前项目不再面向 Atari 图像输入，也不再使用图像预处理、卷积网络或帧堆叠流程。现在的默认范式是：
+项目目标是为本科毕业设计提供一个结构清晰、可运行、便于实验复现和论文写作的强化学习代码基础。
 
-- 低维状态输入
-- MLP Q 网络
-- 经验回放 / 优先经验回放
-- 单次训练、批量实验、结果汇总、模型回放
+## 项目特点
 
-当前优先支持的环境包括：
+- 支持 DQN 与 PER-DQN 两种算法
+- 支持 Taxi-v3、MountainCar-v0、自定义 Dino 环境
+- 统一使用低维状态向量与 MLP Q 网络
+- 训练、评估、批量实验、自动绘图入口相互分离
+- 自动保存日志、模型参数与对比图像
+- 对关键模块补充了适量中文注释，便于课程设计与论文答辩说明
 
-- `CartPole-v1`：基础算法验证
-- `Taxi-v3`：主要策略决策实验
-- `MountainCar-v0`：补充稀疏奖励实验
+## 项目结构
 
-后续也可以扩展到自定义小游戏环境，例如谷歌小恐龙，但建议继续采用**特征向量状态**而不是像素图像输入。
-
-## 当前功能
-
-- `DQN`
-  - 目标网络
-  - experience replay
-  - epsilon-greedy 探索
-- `PER-DQN`
-  - 优先经验回放
-  - 重要性采样权重
-  - `SumTree` 采样
-- 统一输入范式
-  - 向量观测直接输入 MLP
-  - 离散状态可转成 one-hot 向量后输入 MLP
-- 工程能力
-  - 单次训练入口
-  - 批量实验 manifest
-  - 训练日志、评估日志、训练曲线
-  - 模型保存与加载
-  - 汇总结果导出为 CSV / JSON / Markdown / 对比图
-
-## 安装
-
-```bash
-uv sync
+```text
+PERDQN_Strategy_Decision/
+├── train.py               # 单环境训练入口
+├── eval.py                # 单环境评估入口
+├── experiment.py          # 批量实验入口
+├── compare_plots.py       # 自动对比绘图入口
+├── main.py                # 兼容提示入口
+├── config.py              # 参数与路径配置
+├── DQN/
+│   ├── __init__.py
+│   ├── training.py
+│   ├── evaluation.py
+│   ├── experiment_utils.py
+│   ├── agents/
+│   ├── buffers/
+│   ├── envs/
+│   ├── models/
+│   └── utils/
+├── results/
+│   ├── models/
+│   ├── logs/
+│   └── figures/
+├── requirements.txt
+├── pyproject.toml
+└── README.md
 ```
 
-或者：
+## 环境说明
+
+### 1. Taxi-v3
+- 离散状态空间
+- 离散动作空间
+- 状态通过 one-hot 编码输入网络
+- 适合体现 PER-DQN 对关键经验的优先学习能力
+
+### 2. MountainCar-v0
+- 连续二维状态空间
+- 离散动作空间
+- 状态经过归一化后输入网络
+- 适合分析 PER-DQN 在稀疏奖励和长期策略任务中的作用与局限
+
+### 3. Dinosaur Game
+- 自定义 Gymnasium 风格环境
+- 使用低维状态向量，不使用图像输入
+- 动作包括：0 不操作，1 跳跃
+- 状态包括：y 坐标、竖直速度、是否落地、障碍物距离、障碍物高度、障碍物宽度、游戏速度
+- 环境中使用简化动力学、奖励设计与碰撞检测，便于解释关键经验的来源
+
+## 算法说明
+
+### DQN
+- Q Network + Target Network
+- Replay Buffer
+- epsilon-greedy
+- Huber Loss
+- 周期性更新目标网络
+
+### PER-DQN
+- 在 DQN 基础上引入 Prioritized Replay Buffer
+- 根据 TD-error 赋予样本优先级
+- 采样时引入 Importance Sampling 权重
+- 使用 alpha 和 beta 控制采样分布与偏差修正
+
+## 三环境下 PER-DQN 的预期表现
+
+### Taxi-v3
+- 关键经验包括成功 pickup、成功 dropoff、错误 pickup/dropoff
+- PER-DQN 预期更快提升平均奖励并减少完成步数
+- 在较简单任务中，最终性能提升可能有限
+
+### MountainCar-v0
+- 关键经验包括接近目标位置、有效积累速度、成功到达山顶
+- PER-DQN 可提高关键转移样本利用率
+- 但如果探索不足，PER-DQN 也无法独立解决学习困难问题
+
+### Dinosaur Game
+- 关键经验包括接近障碍物、成功越过障碍物、碰撞失败
+- PER-DQN 预期更快提高平均存活时间和通过障碍物数量
+- 自定义环境结论会受到奖励设计和状态设计影响
+
+## 安装方式
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -e .
+pip install -r requirements.txt
 ```
 
-## 快速开始
+## 配置方式
 
-### 1. 单次训练
+本项目默认不使用命令行参数，直接在 [config.py](config.py) 中修改：
 
-直接运行：
+### 训练入口配置
+- `TRAIN_CONFIG["env_name"]`：`taxi` / `mountaincar` / `dino`
+- `TRAIN_CONFIG["algo_name"]`：`dqn` / `perdqn`
+- `TRAIN_CONFIG["render"]`：训练时是否渲染
+- `TRAIN_CONFIG["plot_after_train"]`：训练结束后是否尝试自动绘图
 
+### 评估入口配置
+- `EVAL_CONFIG["env_name"]`
+- `EVAL_CONFIG["algo_name"]`
+- `EVAL_CONFIG["render"]`
+- `EVAL_CONFIG["use_best_model"]`
+
+### 批量实验配置
+- `EXPERIMENT_CONFIG["env_names"]`
+- `EXPERIMENT_CONFIG["algo_names"]`
+- `EXPERIMENT_CONFIG["seeds"]`
+
+### 自动绘图配置
+- `PLOT_CONFIG["env_names"]`
+- `PLOT_CONFIG["window"]`
+
+## 运行方式
+
+### 1. 单环境训练
 ```bash
 python train.py
 ```
 
-默认配置定义在 [config.py](config.py) 中。
-
-当前默认环境是 `CartPole-v1`，这样可以先用最低成本验证训练链路。
-
-几个常用配置项：
-
-- `core.env_name`：环境名
-- `core.env_family`：环境类型（`auto` / `vector` / `discrete` / `custom`）
-- `training.hidden_sizes`：MLP 隐藏层结构
-- `replay.use_per`：是否启用 PER
-- `replay.obs_encoding`：观测编码方式（如 `identity` / `one_hot`）
-- `core.max_steps`：总环境步数上限
-- `replay.initial_random_steps`：纯随机 warmup 步数
-- `replay.training_start_steps`：训练启动门槛
-- `training.train_freq` / `training.gradient_steps`：训练频率
-- `evaluation.eval_interval_env_steps` / `evaluation.eval_episodes`：评估节奏
-- `evaluation.eval_epsilon` / `evaluation.eval_max_episode_steps`：评估时探索率与单局步数上限
-- `evaluation.success_threshold`：成功率统计阈值
-
-## 当前推荐环境设置
-
-### `CartPole-v1`
-用途：基础算法验证
-
-建议：
-- `env_family="vector"`
-- `obs_encoding="identity"`
-- 用于先验证 DQN / PER-DQN 链路是否跑通
-
-### `Taxi-v3`
-用途：主要策略决策实验
-
-建议：
-- `env_family="discrete"`
-- `obs_encoding="one_hot"`
-- 适合做动作选择、策略稳定性与关键决策分析
-
-### `MountainCar-v0`
-用途：补充稀疏奖励实验
-
-建议：
-- `env_family="vector"`
-- `obs_encoding="identity"`
-- 适合观察 PER 在稀疏奖励和延迟回报任务中的表现
-
-## 2. 模型演示
-
+### 2. 单环境评估
 ```bash
-python play.py
+python eval.py
 ```
 
-播放行为会读取 [config.py](config.py) 中的当前环境与模型配置。
-
-如果默认模型文件不存在，脚本会明确提示当前将使用未训练策略，而不是静默假装加载成功。
-
-## 3. 运行批量实验
-
-实验入口在 [experiment.py](experiment.py)。
-
-当前实验配置分成两层：
-
-- `base_config`：单次训练配置
-- `ExperimentSettings`：实验调度配置
-
-可修改的常见项包括：
-
-- `base_config.core.env_name`
-- `base_config.core.max_steps`
-- `base_config.training.learning_rate`
-- `base_config.replay.use_per`
-- `envs`
-- `seeds`
-- `variants`
-- `output_root`
-
-运行方式：
-
+### 3. 批量实验
 ```bash
 python experiment.py
 ```
 
-默认目录结构示例：
-
-```text
-experiments/
-  experiment_manifest.json
-  CartPole-v1/
-    dqn/
-      seed_42/
-        logs/
-        models/
-    per_dqn/
-      seed_42/
-        logs/
-        models/
-```
-
-## 4. 汇总实验结果
-
-在 [summarize_experiments.py](summarize_experiments.py) 中设置：
-
-- `manifest_path`
-- `output_dir`
-
-然后运行：
-
+### 4. 自动生成对比图
 ```bash
-python summarize_experiments.py
+python compare_plots.py
 ```
 
-输出内容包括：
+## 推荐实验流程
 
-- `aggregate_results.csv`
-- `aggregate_results.json`
-- `aggregate_results.md`
-- 每个环境一张对比曲线图
+建议按下面顺序完成论文实验：
 
-## 训练与日志产物
+1. 在 `config.py` 中设置单环境训练参数
+2. 使用 `python train.py` 分别训练 DQN 与 PER-DQN
+3. 使用 `python eval.py` 评估模型效果
+4. 使用 `python experiment.py` 运行多随机种子批量实验
+5. 使用 `python compare_plots.py` 统一生成对比图
+6. 根据 `results/logs/`、`results/models/`、`results/figures/` 整理论文结果
 
-每次训练会在对应 `log_dir` 和 `save_dir` 下生成。
+## 默认参数说明
 
-- 单次直接运行 `python train.py` 时，默认目录通常是 `runs/` 与 `models/`
-- 通过 `python experiment.py` 运行批量实验时，每个 run 的目录通常是 `.../logs/` 与 `.../models/`
+当前默认参数针对论文实验做了适度调整：
 
-### `logs/`
+- `moving_average_window = 50`：更适合绘制论文中的平滑训练曲线
+- `test_episodes = 20`：评估结果更稳定
+- Taxi 默认 `episodes = 1500`
+- MountainCar 默认 `episodes = 2000`
+- Dino 默认 `episodes = 1800`
+- 按环境分别设置 `min_replay_size` 和 `epsilon_decay`，更符合不同任务难度
 
-- `config.json`：本次训练实际使用的配置
-- `metrics.json`：完整日志，包含：
-  - `episode_rewards`
-  - `episode_lengths`
-  - `episode_losses`
-  - `epsilons`
-  - `avg_rewards`
-  - `eval_steps`
-  - `eval_rewards`
-  - `global_steps`
-  - `step_losses`
-  - `step_epsilons`
-- `run_summary.json`：用于实验汇总的摘要结果
-- `training_curves.png`：训练曲线图
+## 输出结果
 
-### `models/`
+### 日志
+保存在：
+- `results/logs/{env_name}_{algo_name}_train_log.csv`
+- 批量实验会额外生成：`results/logs/experiment_summary.csv`
 
-- `*_ep{n}.pth`：按 `save_freq` 定期保存的模型文件
+单次训练日志字段包括：
+- `episode`
+- `total_reward`
+- `steps`
+- `epsilon`
+- `loss`
+- `success`
+- `custom_metric`
 
-这些文件的定位是**模型保存与结果归档**：它们保存模型权重与必要元数据，用于评估、播放和实验结果留档。
+### 模型
+保存在：
+- `results/models/{env_name}_{algo_name}_best.pth`
+- `results/models/{env_name}_{algo_name}_final.pth`
+- 批量实验模型会追加 `seed` 后缀
 
-当前版本不以恢复训练为目标，因此这里的保存文件应理解为“可加载模型做评估/回放的模型工件”，而不是“可无缝续训的训练快照”。
+### 图像
+保存在：
+- `results/figures/`
 
-## 当前实现说明
+包括：
+- 奖励对比曲线
+- 步数对比曲线
+- loss 对比曲线
+- success rate 或障碍物通过数量对比曲线
 
-### 1. 网络结构
+## 代码设计说明
 
-当前默认网络是 MLP，而不是 CNN。
+### 为什么把实现统一放入 `DQN/` 包
+这样可以把入口文件和核心实现分开，便于：
+- 组织训练、评估、批量实验等不同流程
+- 统一管理导入路径
+- 提高项目可读性
 
-- 向量状态：直接输入 MLP
-- 离散状态：先编码为向量，再输入 MLP
+### 为什么继续使用低维状态 + MLP
+这是为了保证：
+- 实现简单稳定
+- 三个环境能共用一套网络结构
+- 更适合作为本科毕业设计项目而不是复杂工业级框架
 
-这让项目更适合：
-- 经典控制环境
-- 离散决策环境
-- 自定义特征状态小游戏环境
+### 为什么 PER 使用简单概率数组实现
+本项目更强调实验可解释性与代码简洁性，因此没有引入更复杂的 SumTree 实现。对于当前实验规模，这种实现已经足够支持论文中的对比实验。
 
-### 2. ReplayBuffer 设计
+## 论文实验分析建议
 
-当前 replay buffer 直接存储完整：
+建议从以下角度分析 DQN 与 PER-DQN：
+- 平均奖励变化趋势
+- 收敛速度
+- 平均步数变化
+- 成功率或通过障碍物数量
+- PER-DQN 在关键经验利用率上的优势
+- PER-DQN 在探索不足和稀疏奖励环境中的局限
 
-- `state`
-- `action`
-- `reward`
-- `next_state`
-- `terminated`
-- `truncated`
+## 说明
 
-因此不再依赖图像帧重建，也不再假设存在帧堆叠。
-
-### 3. PER 实现
-
-当前 `PER-DQN` 使用：
-
-- `SumTree` 做优先级采样
-- importance sampling weights 做偏差修正
-- TD error 更新优先级
-
-## 论文或实验汇报建议
-
-建议把**评估指标**作为主结论来源，把训练期指标作为辅助分析来源。
-
-建议优先使用以下指标：
-
-- `final_eval_reward`
-- 固定训练步数下的 `eval_reward`
-- 多 seed 的均值与标准差
-- `best_eval_reward`
-- `final_eval_success_rate`（当环境设置了成功阈值时）
-
-在写毕业论文时，建议：
-
-- `CartPole-v1` 用于基础验证
-- `Taxi-v3` 作为策略决策分析主体
-- `MountainCar-v0` 作为补充实验
-
-如果后续加入谷歌小恐龙环境，建议继续使用**特征工程状态表示**，这样更容易控制训练成本，也更适合论文分析。
-
-## 主要文件说明
-
-- [train.py](train.py)：单次训练入口，包含训练调度、评估和定期模型保存逻辑
-- [play.py](play.py)：模型演示
-- [experiment.py](experiment.py)：批量实验入口
-- [summarize_experiments.py](summarize_experiments.py)：结果汇总与绘图
-- [config.py](config.py)：训练配置定义
-- [dqn/agent.py](dqn/agent.py)：DQN / PER 训练逻辑
-- [dqn/replay_buffer.py](dqn/replay_buffer.py)：通用回放缓冲区与 `SumTree`
-- [dqn/network.py](dqn/network.py)：MLP Q 网络
-- [dqn/env.py](dqn/env.py)：Gym 环境构造与观测编码
-- [dqn/utils.py](dqn/utils.py)：日志、绘图与随机种子工具
-
-## 当前限制
-
-- 当前仓库已经完成从 Atari 风格到低维状态风格的核心迁移，但不同环境的默认超参数仍需进一步打磨。
-- 当前 PER 在短程 smoke test 中已可运行，但要用于论文主结论前，仍建议做更稳的多 seed 验证。
-- 仓库目前还没有完整的自动化测试体系，当前验证主要依赖模块测试与短程训练测试。
-- 论文所需的“策略决策分析日志”还未在这一轮中实现，后续会作为下一阶段补充。
-
-## 参考文献
-
-- Mnih et al., 2015. Human-level control through deep reinforcement learning.
-- Schaul et al., 2016. Prioritized Experience Replay.
+本项目强调代码清晰、稳定、可运行，适合本科毕业设计，不追求复杂工业级框架设计。若后续需要，还可以在此基础上继续补充更完整的批量统计、平均曲线汇总和实验表格输出。

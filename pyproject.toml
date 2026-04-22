@@ -1,11 +1,10 @@
 [project]
-name = "dqn"
+name = "perdqn-strategy-decision"
 version = "0.1.0"
-description = "Add your description here"
+description = "Undergraduate RL project for DQN and PER-DQN strategy decision experiments"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "ale-py>=0.11.2",
     "gymnasium[other]>=1.2.3",
     "matplotlib>=3.10.8",
     "numpy>=2.4.4",

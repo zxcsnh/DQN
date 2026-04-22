@@ -7,7 +7,6 @@ wheels/
 *.egg-info
 runs/
 videos/
-models/
 # Virtual environments
 .venv
 CLAUDE.md

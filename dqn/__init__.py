@@ -1,3 +1,4 @@
-"""DQN 强化学习核心模块。"""
+from .training import train
+from .evaluation import evaluate
 
-__version__ = "0.1.0"
+__all__ = ["train", "evaluate"]
