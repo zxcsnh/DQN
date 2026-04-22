@@ -26,7 +26,7 @@ class ExperimentSettings:
     """批量实验调度配置，与单次训练配置解耦。"""
 
     base_config: DQNConfig = field(default_factory=DQNConfig)
-    envs: list[str] = field(default_factory=lambda: ["ALE/Pong-v5"])
+    envs: list[str] = field(default_factory=lambda: ["CartPole-v1", "Taxi-v3", "MountainCar-v0"])
     seeds: list[int] = field(default_factory=lambda: [42])
     variants: list[str] = field(default_factory=lambda: ["dqn", "per"])
     output_root: str = "experiments"
@@ -43,7 +43,6 @@ class ExperimentSettings:
         run_keys = list(self.iter_runs())
         if len(run_keys) != len(set(run_keys)):
             raise ValueError("Duplicate (env, variant, seed) runs are not allowed.")
-
 
     def manifest_path(self) -> str:
         return os.path.join(self.output_root, "experiment_manifest.json")
@@ -147,7 +146,53 @@ def build_run_config(
     config.replay.use_per = variant == "per"
     config.logging.save_dir = os.path.join(run_dir, "models")
     config.logging.log_dir = os.path.join(run_dir, "logs")
+    _apply_environment_defaults(config, env_name)
     return config
+
+
+def _apply_environment_defaults(config: DQNConfig, env_name: str) -> None:
+    if env_name == "CartPole-v1":
+        config.core.env_family = "vector"
+        config.core.max_steps = 20_000
+        config.training.hidden_sizes = (128, 128)
+        config.replay.obs_encoding = "identity"
+        config.replay.buffer_size = 20_000
+        config.replay.training_start_steps = 1_000
+        config.replay.initial_random_steps = 1_000
+        config.replay.epsilon_decay = 10_000
+        config.evaluation.eval_interval_env_steps = 2_000
+        config.evaluation.eval_episodes = 10
+        config.evaluation.eval_max_episode_steps = 500
+        config.evaluation.success_threshold = 475.0
+        return
+    if env_name == "Taxi-v3":
+        config.core.env_family = "discrete"
+        config.core.max_steps = 50_000
+        config.training.hidden_sizes = (256, 256)
+        config.replay.obs_encoding = "one_hot"
+        config.replay.buffer_size = 50_000
+        config.replay.training_start_steps = 2_000
+        config.replay.initial_random_steps = 2_000
+        config.replay.epsilon_decay = 25_000
+        config.evaluation.eval_interval_env_steps = 5_000
+        config.evaluation.eval_episodes = 20
+        config.evaluation.eval_max_episode_steps = 200
+        config.evaluation.success_threshold = 8.0
+        return
+    if env_name == "MountainCar-v0":
+        config.core.env_family = "vector"
+        config.core.max_steps = 80_000
+        config.training.hidden_sizes = (128, 128)
+        config.replay.obs_encoding = "identity"
+        config.replay.buffer_size = 50_000
+        config.replay.training_start_steps = 2_000
+        config.replay.initial_random_steps = 2_000
+        config.replay.epsilon_decay = 40_000
+        config.evaluation.eval_interval_env_steps = 5_000
+        config.evaluation.eval_episodes = 10
+        config.evaluation.eval_max_episode_steps = 200
+        config.evaluation.success_threshold = -120.0
+        return
 
 
 def create_manifest(settings: ExperimentSettings, base_config: DQNConfig) -> dict:
@@ -186,7 +231,7 @@ def main():
     base_config = DQNConfig()
     settings = ExperimentSettings(
         base_config=base_config,
-        envs=["ALE/Pong-v5"],
+        envs=["CartPole-v1", "Taxi-v3", "MountainCar-v0"],
         seeds=[42],
         variants=["dqn", "per"],
         max_workers=1,

@@ -7,6 +7,7 @@ import os
 from typing import Any
 
 import numpy as np
+from gymnasium import spaces
 
 from config import DQNConfig, TrainingStats
 from dqn.agent import DQNAgent
@@ -21,7 +22,6 @@ def train(config: DQNConfig) -> dict[str, Any]:
     replay = config.replay
     logging = config.logging
     evaluation = config.evaluation
-    preprocess = config.preprocess
     device_config = config.device_config
 
     set_seed(
@@ -38,42 +38,39 @@ def train(config: DQNConfig) -> dict[str, Any]:
     logger = None
 
     try:
-        # Training uses the optimization protocol: reward clipping may be enabled
-        # and life loss can be treated as an episode boundary.
         env = make_env(
             core.env_name,
-            frame_size=preprocess.frame_size,
-            frame_skip=preprocess.frame_skip,
-            frame_stack=preprocess.frame_stack,
-            noop_max=preprocess.noop_max,
-            clip_reward=preprocess.clip_reward,
+            env_family=core.env_family,
+            obs_encoding=replay.obs_encoding,
             seed=core.seed,
-            terminal_on_life_loss=preprocess.terminal_on_life_loss,
+            max_episode_steps_override=evaluation.eval_max_episode_steps,
         )
-        # Evaluation uses the reporting protocol: unclipped rewards and no
-        # life-loss termination, matching playback semantics.
         eval_env = make_env(
             core.env_name,
-            frame_size=preprocess.frame_size,
-            frame_skip=preprocess.frame_skip,
-            frame_stack=preprocess.frame_stack,
-            noop_max=preprocess.noop_max,
-            clip_reward=False,
+            env_family=core.env_family,
+            obs_encoding=replay.obs_encoding,
             seed=core.seed,
-            terminal_on_life_loss=False,
+            max_episode_steps_override=evaluation.eval_max_episode_steps,
         )
+
+        observation_space = env.observation_space
+        if not isinstance(observation_space, spaces.Box):
+            raise TypeError(f"Expected vector observation space after wrapping, got {observation_space}")
+        obs_dim = int(np.prod(observation_space.shape))
 
         device = config.get_device()
         print(f"Training device: {device}")
         print(f"Environment: {core.env_name}")
         print(f"Num actions: {env.action_space.n}")
+        print(f"Observation dim: {obs_dim}")
         print(f"Training starts at env step: {training_start_step}")
 
         agent = DQNAgent(
             num_actions=env.action_space.n,
-            input_channels=preprocess.frame_stack,
-            input_shape=preprocess.frame_size,
+            obs_dim=obs_dim,
             device=device,
+            network_type="mlp",
+            hidden_sizes=training.hidden_sizes,
             learning_rate=training.learning_rate,
             gamma=training.gamma,
             initial_random_steps=replay.initial_random_steps,
@@ -89,7 +86,6 @@ def train(config: DQNConfig) -> dict[str, Any]:
             per_beta_updates=replay.per_beta_updates,
             use_soft_target_update=training.use_soft_target_update,
             soft_target_update_tau=training.soft_target_update_tau,
-            frame_stack=preprocess.frame_stack,
             optimizer_name=training.optimizer_name,
             rmsprop_alpha=training.rmsprop_alpha,
             rmsprop_eps=training.rmsprop_eps,
@@ -123,17 +119,24 @@ def train(config: DQNConfig) -> dict[str, Any]:
         next_eval_step = _next_eval_step(config, stats.total_steps, logger)
 
         def run_evaluation(step: int) -> None:
-            eval_reward = evaluate(
+            eval_result = evaluate(
                 agent,
                 eval_env,
                 config,
                 num_eval=evaluation.eval_episodes,
             )
-            logger.log_evaluation(step, eval_reward)
-            print(f"Evaluation reward @ step {step}: {eval_reward:.2f}")
+            logger.log_evaluation(step, eval_result["mean_reward"])
+            print(
+                f"Evaluation reward @ step {step}: {eval_result['mean_reward']:.2f} | "
+                f"success_rate={eval_result['success_rate']:.2f}"
+            )
 
-            if eval_reward > stats.best_eval_reward:
-                stats.best_eval_reward = eval_reward
+            if eval_result["mean_reward"] > stats.best_eval_reward:
+                stats.best_eval_reward = eval_result["mean_reward"]
+            stats.best_eval_success_rate = max(
+                stats.best_eval_success_rate,
+                eval_result["success_rate"],
+            )
 
         episode = agent.episodes_done
         while True:
@@ -146,6 +149,7 @@ def train(config: DQNConfig) -> dict[str, Any]:
             episode += 1
             reset_seed = core.seed if stats.total_steps == 0 and episode == 1 else None
             state, _ = env.reset(seed=reset_seed)
+            state = np.asarray(state, dtype=np.float32).reshape(-1)
             agent.begin_episode(state)
 
             episode_reward = 0.0
@@ -156,6 +160,7 @@ def train(config: DQNConfig) -> dict[str, Any]:
             while not done:
                 action = agent.select_action(state)
                 next_state, reward, terminated, truncated, _ = env.step(action)
+                next_state = np.asarray(next_state, dtype=np.float32).reshape(-1)
                 done = terminated or truncated
 
                 agent.store_transition(
@@ -228,42 +233,45 @@ def train(config: DQNConfig) -> dict[str, Any]:
                 print(f"Reached max training steps: {core.max_steps}")
                 break
 
+        final_eval_result = {"mean_reward": None, "success_rate": 0.0}
         if evaluation.eval_episodes > 0:
             needs_final_eval = (
                 len(logger.eval_steps) == 0 or logger.eval_steps[-1] < stats.total_steps
             )
             if needs_final_eval:
-                run_evaluation(stats.total_steps)
+                final_eval_result = evaluate(agent, eval_env, config, num_eval=evaluation.eval_episodes)
+                logger.log_evaluation(stats.total_steps, final_eval_result["mean_reward"])
+            else:
+                final_eval_result["mean_reward"] = logger.eval_rewards[-1] if logger.eval_rewards else None
 
         logger.save_metrics(os.path.join(logging.log_dir, "metrics.json"))
         logger.plot_training_curves(os.path.join(logging.log_dir, "training_curves.png"))
 
         summary: dict[str, Any] = {
             "env_name": core.env_name,
+            "env_family": core.env_family,
             "seed": core.seed,
             "use_per": replay.use_per,
             "use_double_dqn": training.use_double_dqn,
             "optimizer_name": training.optimizer_name,
+            "obs_encoding": replay.obs_encoding,
+            "network_type": "mlp",
+            "hidden_sizes": list(training.hidden_sizes),
             "total_steps": stats.total_steps,
             "episodes_completed": stats.episode,
             "best_eval_reward": stats.best_eval_reward,
             "best_eval_step": _best_eval_step(logger),
+            "best_eval_success_rate": stats.best_eval_success_rate,
             "final_eval_reward": logger.eval_rewards[-1] if logger.eval_rewards else None,
+            "final_eval_success_rate": final_eval_result["success_rate"],
             "final_train_reward": last_episode_reward,
             "final_train_avg_reward_100": stats.avg_reward_100,
             "final_avg_reward_100": stats.avg_reward_100,
             "final_loss": last_avg_loss,
             "eval_steps": logger.eval_steps,
             "eval_rewards": logger.eval_rewards,
-            "train_clip_reward": preprocess.clip_reward,
-            "train_terminal_on_life_loss": preprocess.terminal_on_life_loss,
-            "eval_clip_reward": False,
-            "eval_terminal_on_life_loss": False,
             "eval_epsilon": evaluation.eval_epsilon,
             "eval_max_episode_steps": evaluation.eval_max_episode_steps,
-            "target_bootstrap_mask": "terminated_only",
-            "protocol_note": "Train may use clipped rewards and life-loss termination; eval/play use unclipped rewards without life-loss termination.",
-            "model_prefix": model_prefix,
         }
         with open(
             os.path.join(logging.log_dir, "run_summary.json"), "w", encoding="utf-8"
@@ -275,8 +283,6 @@ def train(config: DQNConfig) -> dict[str, Any]:
         print(f"Best evaluation reward: {stats.best_eval_reward:.2f}")
         print(f"Model saved to: {logging.save_dir}")
         return summary
-    except Exception:
-        raise
     finally:
         if logger is not None:
             logger.close()
@@ -291,18 +297,20 @@ def evaluate(
     eval_env,
     config: DQNConfig,
     num_eval: int = 10,
-) -> float:
-    """Evaluate the policy and return the mean reward."""
+) -> dict[str, float]:
+    """Evaluate the policy and return reward/success metrics."""
     if num_eval <= 0:
         raise ValueError("num_eval must be a positive integer.")
 
     agent.eval_mode()
     total_rewards = []
+    successes = 0
 
     try:
         for eval_idx in range(num_eval):
             eval_seed = config.core.seed + config.evaluation.eval_seed_offset + eval_idx
             state, _ = eval_env.reset(seed=eval_seed)
+            state = np.asarray(state, dtype=np.float32).reshape(-1)
             episode_reward = 0.0
             episode_steps = 0
             done = False
@@ -320,15 +328,22 @@ def evaluate(
                     epsilon_override=config.evaluation.eval_epsilon,
                 )
                 state, reward, terminated, truncated, _ = eval_env.step(action)
+                state = np.asarray(state, dtype=np.float32).reshape(-1)
                 episode_reward += reward
                 episode_steps += 1
                 done = terminated or truncated
 
             total_rewards.append(episode_reward)
+            threshold = config.evaluation.success_threshold
+            if threshold is not None and episode_reward >= threshold:
+                successes += 1
     finally:
         agent.train_mode()
 
-    return float(np.mean(total_rewards))
+    return {
+        "mean_reward": float(np.mean(total_rewards)),
+        "success_rate": float(successes / num_eval) if config.evaluation.success_threshold is not None else 0.0,
+    }
 
 
 def _should_train(agent: DQNAgent, config: DQNConfig, training_start_step: int) -> bool:
@@ -359,14 +374,9 @@ def _next_eval_step(
 def _best_eval_step(logger: TrainingLogger) -> int | None:
     if not logger.eval_rewards:
         return None
-    best_index = int(np.argmax(np.asarray(logger.eval_rewards, dtype=np.float32)))
-    return logger.eval_steps[best_index]
-
-
-def main() -> None:
-    config = DQNConfig()
-    train(config)
+    best_index = int(np.argmax(logger.eval_rewards))
+    return int(logger.eval_steps[best_index])
 
 
 if __name__ == "__main__":
-    main()
+    train(DQNConfig())

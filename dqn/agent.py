@@ -1,4 +1,4 @@
-"""DQN agent implementation."""
+"""DQN agent implementation for vector-observation environments."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from .network import DQNCNN
+from .network import build_q_network
 from .replay_buffer import PrioritizedReplayBuffer, ReplayBatch, ReplayBuffer
 
 
@@ -18,26 +18,26 @@ class DQNAgent:
     def __init__(
         self,
         num_actions: int,
-        input_channels: int = 4,
+        obs_dim: int,
         device: str = "cpu",
-        learning_rate: float = 2.5e-4,
+        network_type: str = "mlp",
+        hidden_sizes: tuple[int, ...] = (128, 128),
+        learning_rate: float = 1e-3,
         gamma: float = 0.99,
-        initial_random_steps: int = 100_000,
+        initial_random_steps: int = 1_000,
         epsilon_start: float = 1.0,
-        epsilon_end: float = 0.1,
-        epsilon_decay: int = 1_000_000,
-        buffer_size: int = 1_000_000,
-        batch_size: int = 32,
-        target_update_interval_updates: int = 10_000,
+        epsilon_end: float = 0.05,
+        epsilon_decay: int = 20_000,
+        buffer_size: int = 50_000,
+        batch_size: int = 64,
+        target_update_interval_updates: int = 500,
         use_per: bool = False,
         per_alpha: float = 0.6,
         per_beta_start: float = 0.4,
-        per_beta_updates: int = 100_000,
+        per_beta_updates: int = 50_000,
         use_soft_target_update: bool = False,
         soft_target_update_tau: float = 0.005,
-        frame_stack: int = 4,
-        input_shape: tuple[int, int] = (84, 84),
-        optimizer_name: str = "rmsprop",
+        optimizer_name: str = "adam",
         rmsprop_alpha: float = 0.95,
         rmsprop_eps: float = 0.01,
         rmsprop_centered: bool = True,
@@ -46,6 +46,7 @@ class DQNAgent:
         seed: Optional[int] = None,
     ):
         self.num_actions = num_actions
+        self.obs_dim = int(obs_dim)
         self.device = device
         self.gamma = gamma
         self.batch_size = batch_size
@@ -53,27 +54,29 @@ class DQNAgent:
         self.use_per = use_per
         self.use_soft_target_update = use_soft_target_update
         self.soft_target_update_tau = soft_target_update_tau
-        self.input_channels = input_channels
-        self.input_shape = input_shape
         self.optimizer_name = optimizer_name
         self.use_double_dqn = use_double_dqn
         self.replay_sample_torch_fastpath = replay_sample_torch_fastpath
         self.initial_random_steps = max(0, initial_random_steps)
+        self.network_type = network_type
+        self.hidden_sizes = tuple(hidden_sizes)
 
         self.epsilon = epsilon_start
         self.epsilon_start = epsilon_start
         self.epsilon_end = epsilon_end
         self.epsilon_decay = epsilon_decay
 
-        self.policy_net = DQNCNN(
-            input_channels,
-            num_actions,
-            input_shape=input_shape,
+        self.policy_net = build_q_network(
+            network_type=network_type,
+            input_dim=self.obs_dim,
+            num_actions=num_actions,
+            hidden_sizes=self.hidden_sizes,
         ).to(device)
-        self.target_net = DQNCNN(
-            input_channels,
-            num_actions,
-            input_shape=input_shape,
+        self.target_net = build_q_network(
+            network_type=network_type,
+            input_dim=self.obs_dim,
+            num_actions=num_actions,
+            hidden_sizes=self.hidden_sizes,
         ).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
@@ -88,8 +91,8 @@ class DQNAgent:
 
         if use_per:
             self.memory = PrioritizedReplayBuffer(
-                buffer_size,
-                frame_stack=frame_stack,
+                capacity=buffer_size,
+                obs_shape=(self.obs_dim,),
                 alpha=per_alpha,
                 beta_start=per_beta_start,
                 beta_updates=per_beta_updates,
@@ -97,14 +100,12 @@ class DQNAgent:
             )
         else:
             self.memory = ReplayBuffer(
-                buffer_size,
-                frame_stack=frame_stack,
+                capacity=buffer_size,
+                obs_shape=(self.obs_dim,),
                 seed=seed,
             )
 
-        # Optimization steps drive target-network updates.
         self.steps_done = 0
-        # Environment steps drive epsilon decay and training schedule.
         self.env_steps_done = 0
         self.episodes_done = 0
 
@@ -118,8 +119,6 @@ class DQNAgent:
     ) -> optim.Optimizer:
         optimizer_name = optimizer_name.lower()
         if optimizer_name == "rmsprop":
-            # This is the closest PyTorch equivalent to the centered RMSProp
-            # variant used by Nature DQN.
             return optim.RMSprop(
                 self.policy_net.parameters(),
                 lr=learning_rate,
@@ -138,7 +137,6 @@ class DQNAgent:
         evaluate: bool = False,
         epsilon_override: float | None = None,
     ) -> int:
-        """Choose an action with epsilon-greedy exploration."""
         if epsilon_override is not None:
             epsilon = epsilon_override
         elif evaluate:
@@ -152,18 +150,16 @@ class DQNAgent:
             return int(np.random.randint(self.num_actions))
 
         with torch.no_grad():
-            state_tensor = torch.as_tensor(state, device=self.device)
-            if len(state_tensor.shape) == 3:
+            state_tensor = torch.as_tensor(state, device=self.device, dtype=torch.float32)
+            if state_tensor.ndim == 1:
                 state_tensor = state_tensor.unsqueeze(0)
             q_values = self.policy_net(state_tensor)
             return int(q_values.argmax(dim=1).item())
 
     def begin_episode(self, initial_state: np.ndarray, stream_id: int = 0) -> None:
-        """Notify the replay buffer that a new episode has started."""
         self.memory.start_episode(initial_state, stream_id=stream_id)
 
     def on_env_step(self) -> None:
-        """Record an environment interaction and update epsilon."""
         self.env_steps_done += 1
         self.update_epsilon()
 
@@ -187,16 +183,15 @@ class DQNAgent:
             stream_id=stream_id,
         )
 
-    def compute_loss(self, batch: ReplayBatch) -> Dict[str, torch.Tensor]:
-        # Only true MDP termination should stop bootstrapping. Time-limit or wrapper
-        # truncation still ends the sampled episode boundary, but does not zero the
-        # Bellman target in the current training protocol.
-        _ = batch.truncated
+    def compute_loss(self, batch: ReplayBatch | tuple) -> Dict[str, torch.Tensor]:
+        if not isinstance(batch, ReplayBatch):
+            batch = ReplayBatch(*batch)
 
-        states = self._to_device_tensor(batch.states)
+        _ = batch.truncated
+        states = self._to_device_tensor(batch.states, dtype=torch.float32)
         actions = self._to_device_tensor(batch.actions, dtype=torch.long)
         rewards = self._to_device_tensor(batch.rewards, dtype=torch.float32)
-        next_states = self._to_device_tensor(batch.next_states)
+        next_states = self._to_device_tensor(batch.next_states, dtype=torch.float32)
         terminated = self._to_device_tensor(batch.terminated, dtype=torch.float32)
 
         current_q = self.policy_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
@@ -207,11 +202,9 @@ class DQNAgent:
                 next_q = self.target_net(next_states).gather(1, next_actions).squeeze(1)
             else:
                 next_q = self.target_net(next_states).max(dim=1).values
-
             target_q = rewards + (1.0 - terminated) * self.gamma * next_q
 
         td_errors = target_q - current_q
-        # Nature DQN clips the TD error to [-1, 1]. Smooth L1 is equivalent.
         per_sample_loss = nn.functional.smooth_l1_loss(
             current_q,
             target_q,
@@ -231,9 +224,7 @@ class DQNAgent:
     ) -> torch.Tensor:
         target_device = torch.device(self.device)
         if isinstance(value, torch.Tensor):
-            if value.device != target_device or (
-                dtype is not None and value.dtype != dtype
-            ):
+            if value.device != target_device or (dtype is not None and value.dtype != dtype):
                 value = value.to(
                     device=target_device,
                     dtype=dtype if dtype is not None else value.dtype,
@@ -322,9 +313,10 @@ class DQNAgent:
             "use_double_dqn": self.use_double_dqn,
             "optimizer_name": self.optimizer_name,
             "model_config": {
-                "input_channels": self.input_channels,
-                "input_shape": self.input_shape,
+                "network_type": self.network_type,
+                "obs_dim": self.obs_dim,
                 "num_actions": self.num_actions,
+                "hidden_sizes": list(self.hidden_sizes),
             },
         }
         torch.save(model_artifact, path)
@@ -357,16 +349,16 @@ class DQNAgent:
 
 if __name__ == "__main__":
     agent = DQNAgent(
-        num_actions=6,
-        input_channels=4,
+        num_actions=2,
+        obs_dim=4,
         device="cpu",
     )
 
-    dummy_state = np.random.randint(0, 255, (4, 84, 84), dtype=np.uint8)
+    dummy_state = np.random.randn(4).astype(np.float32)
     action = agent.select_action(dummy_state)
     print(f"Selected action: {action}")
 
-    dummy_next_state = np.random.randint(0, 255, (4, 84, 84), dtype=np.uint8)
+    dummy_next_state = np.random.randn(4).astype(np.float32)
     agent.begin_episode(dummy_state)
     agent.store_transition(dummy_state, action, 1.0, dummy_next_state, False, False)
 

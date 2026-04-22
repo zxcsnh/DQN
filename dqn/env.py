@@ -1,51 +1,94 @@
-"""Atari 环境构造与预处理工具。"""
+"""Environment construction helpers for low-dimensional Gym tasks."""
 
-from typing import Optional
+from __future__ import annotations
 
-import ale_py
+from typing import Any, Optional
+
 import gymnasium as gym
 import numpy as np
+from gymnasium import spaces
+
+
+class DiscreteObservationWrapper(gym.ObservationWrapper):
+    """Convert discrete state ids into vectors usable by MLP policies."""
+
+    def __init__(self, env: gym.Env, encoding: str = "one_hot"):
+        super().__init__(env)
+        if not isinstance(env.observation_space, spaces.Discrete):
+            raise TypeError("DiscreteObservationWrapper requires a Discrete observation space.")
+        if encoding != "one_hot":
+            raise ValueError(f"Unsupported discrete observation encoding: {encoding}")
+
+        self.encoding = encoding
+        self.num_states = int(env.observation_space.n)
+        self.observation_space = spaces.Box(
+            low=0.0,
+            high=1.0,
+            shape=(self.num_states,),
+            dtype=np.float32,
+        )
+
+    def observation(self, observation: int) -> np.ndarray:
+        encoded = np.zeros(self.num_states, dtype=np.float32)
+        encoded[int(observation)] = 1.0
+        return encoded
+
+
+class ObservationToFloat32Wrapper(gym.ObservationWrapper):
+    """Normalize all vector observations to float32 arrays."""
+
+    def __init__(self, env: gym.Env):
+        super().__init__(env)
+        if not isinstance(env.observation_space, spaces.Box):
+            raise TypeError("ObservationToFloat32Wrapper requires a Box observation space.")
+
+        shape = tuple(int(v) for v in env.observation_space.shape)
+        self.observation_space = spaces.Box(
+            low=-np.inf,
+            high=np.inf,
+            shape=shape,
+            dtype=np.float32,
+        )
+
+    def observation(self, observation: Any) -> np.ndarray:
+        return np.asarray(observation, dtype=np.float32)
+
+
+def infer_env_family(env: gym.Env) -> str:
+    observation_space = env.observation_space
+    if isinstance(observation_space, spaces.Discrete):
+        return "discrete"
+    if isinstance(observation_space, spaces.Box):
+        return "vector"
+    raise TypeError(f"Unsupported observation space: {observation_space}")
 
 
 def make_env(
     env_name: str,
-    frame_size: tuple[int, int] = (84, 84),
-    frame_skip: int = 4,
-    frame_stack: int = 4,
-    noop_max: int = 30,
-    clip_reward: bool = True,
+    env_family: str = "auto",
+    obs_encoding: str = "auto",
     render_mode: Optional[str] = None,
     seed: Optional[int] = None,
-    terminal_on_life_loss: bool = False,
+    max_episode_steps_override: int | None = None,
 ) -> gym.Env:
-    """创建带标准 Atari 预处理的环境。"""
-    if frame_size[0] != frame_size[1]:
-        raise ValueError(
-            "Gymnasium AtariPreprocessing only supports square screen_size values."
-        )
+    """Create a low-dimensional Gymnasium environment with vector observations."""
+    env = gym.make(env_name, render_mode=render_mode)
 
-    gym.register_envs(ale_py)
+    inferred_family = infer_env_family(env) if env_family == "auto" else env_family
+    if inferred_family == "discrete":
+        encoding = "one_hot" if obs_encoding == "auto" else obs_encoding
+        env = DiscreteObservationWrapper(env, encoding=encoding)
+    elif inferred_family in {"vector", "custom"}:
+        if not isinstance(env.observation_space, spaces.Box):
+            raise TypeError(
+                f"env_family={inferred_family} requires a Box observation space, got {env.observation_space}"
+            )
+        env = ObservationToFloat32Wrapper(env)
+    else:
+        raise ValueError(f"Unsupported env_family: {inferred_family}")
 
-    # 关闭 ALE 自带的 frameskip，避免与 wrapper 的跳帧逻辑重复。
-    env = gym.make(env_name, render_mode=render_mode, frameskip=1)
-
-    env = gym.wrappers.AtariPreprocessing(
-        env,
-        noop_max=noop_max,
-        frame_skip=frame_skip,
-        screen_size=frame_size[0],
-        grayscale_obs=True,
-        scale_obs=False,
-        terminal_on_life_loss=terminal_on_life_loss,
-    )
-    # 将连续多帧叠起来，让网络感知运动信息。
-    env = gym.wrappers.FrameStackObservation(env, frame_stack)
-
-    if clip_reward:
-        # 奖励裁剪是经典 DQN 在 Atari 上常见的稳定化技巧。
-        env = gym.wrappers.TransformReward(
-            env, lambda reward: float(np.clip(reward, -1.0, 1.0))
-        )
+    if max_episode_steps_override is not None:
+        env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps_override)
 
     if seed is not None:
         env.action_space.seed(seed)
@@ -54,21 +97,14 @@ def make_env(
 
 
 if __name__ == "__main__":
-    env = make_env("ALE/Pong-v5")
+    for env_name in ("CartPole-v1", "Taxi-v3", "MountainCar-v0"):
+        env = make_env(env_name)
+        print(f"Environment: {env_name}")
+        print(f"Observation space: {env.observation_space}")
+        print(f"Action space: {env.action_space}")
+        obs, _ = env.reset(seed=42)
+        print(f"Initial observation shape: {np.asarray(obs).shape}")
+        env.close()
+        print("-" * 40)
 
-    print(f"Observation space: {env.observation_space}")
-    print(f"Action space: {env.action_space}")
-
-    obs, info = env.reset(seed=42)
-    print(f"Initial observation shape: {obs.shape}")
-
-    for i in range(10):
-        action = env.action_space.sample()
-        obs, reward, terminated, truncated, info = env.step(action)
-        print(f"Step {i + 1}: reward={reward:.2f}, shape={obs.shape}")
-
-        if terminated or truncated:
-            obs, info = env.reset(seed=42 + i + 1)
-
-    env.close()
-    print("\nEnvironment smoke test finished")
+    print("Environment smoke test finished")

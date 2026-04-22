@@ -1,4 +1,4 @@
-"""使用训练好的模型进行演示或录制视频。"""
+"""Playback helpers for trained low-dimensional DQN agents."""
 
 from __future__ import annotations
 
@@ -7,71 +7,60 @@ import sys
 import time
 
 import numpy as np
+from gymnasium import spaces
 
 from config import DQNConfig
 from dqn.agent import DQNAgent
 from dqn.env import make_env
 
 
-def infer_model_metadata(
-    model_path: str | None,
-    default_channels: int,
-    default_frame_size: tuple[int, int],
-) -> tuple[int, tuple[int, int]]:
-    """优先从已保存模型推断输入配置，失败时回退到默认值。"""
+def infer_model_metadata(model_path: str | None, default_hidden_sizes: tuple[int, ...]) -> dict[str, object]:
+    """Infer vector-model configuration from a saved artifact when available."""
+    metadata = {
+        "network_type": "mlp",
+        "obs_dim": None,
+        "num_actions": None,
+        "hidden_sizes": list(default_hidden_sizes),
+    }
     if not model_path or not os.path.exists(model_path):
-        return default_channels, default_frame_size
+        return metadata
 
     try:
         import torch
 
         artifact = torch.load(model_path, map_location="cpu", weights_only=False)
         model_config = artifact.get("model_config", {})
-
-        input_channels = int(model_config.get("input_channels", default_channels))
-        input_shape = model_config.get("input_shape", default_frame_size)
-        if isinstance(input_shape, list):
-            input_shape = tuple(input_shape)
-        if not (isinstance(input_shape, tuple) and len(input_shape) == 2):
-            input_shape = default_frame_size
-
-        policy_state = artifact.get("policy_net", {})
-        conv1_weight = policy_state.get("conv1.weight")
-        if conv1_weight is not None and conv1_weight.ndim == 4:
-            input_channels = int(conv1_weight.shape[1])
-
-        return input_channels, tuple(int(v) for v in input_shape)
+        metadata["network_type"] = model_config.get("network_type", "mlp")
+        metadata["obs_dim"] = model_config.get("obs_dim")
+        metadata["num_actions"] = model_config.get("num_actions")
+        metadata["hidden_sizes"] = model_config.get("hidden_sizes", list(default_hidden_sizes))
     except Exception as exc:
         print(f"Warning: failed to infer model metadata from saved model: {exc}")
 
-    return default_channels, default_frame_size
+    return metadata
 
 
 def play(
-    env_name: str = "ALE/Pong-v5",
+    env_name: str = "CartPole-v1",
+    env_family: str = "auto",
+    obs_encoding: str = "auto",
     model_path: str | None = None,
     num_episodes: int = 5,
     render: bool = True,
     delay: float = 0.02,
     device: str = "auto",
-    frame_stack: int = 4,
-    frame_size: tuple[int, int] = (84, 84),
+    hidden_sizes: tuple[int, ...] = (128, 128),
 ):
     """运行若干回合，用于观察训练后策略的表现。"""
     if model_path is not None and not os.path.exists(model_path):
         raise FileNotFoundError(f"Model file does not exist: {model_path}")
 
-    input_channels, input_shape = infer_model_metadata(
-        model_path, frame_stack, frame_size
-    )
     render_mode = "human" if render else None
     env = make_env(
         env_name,
+        env_family=env_family,
+        obs_encoding=obs_encoding,
         render_mode=render_mode,
-        frame_stack=input_channels,
-        frame_size=input_shape,
-        clip_reward=False,
-        terminal_on_life_loss=False,
     )
 
     if device == "auto":
@@ -80,16 +69,21 @@ def play(
         device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
+    metadata = infer_model_metadata(model_path, hidden_sizes)
+    observation_space = env.observation_space
+    if not isinstance(observation_space, spaces.Box):
+        raise TypeError(f"Expected wrapped Box observation space, got {observation_space}")
+
+    obs_dim = int(np.prod(observation_space.shape))
     num_actions = env.action_space.n
     print(f"Environment: {env_name}")
     print(f"Num actions: {num_actions}")
-    print(f"Input channels: {input_channels}")
-    print(f"Input shape: {input_shape}")
+    print(f"Observation dim: {obs_dim}")
 
     agent = DQNAgent(
         num_actions=num_actions,
-        input_channels=input_channels,
-        input_shape=input_shape,
+        obs_dim=obs_dim,
+        hidden_sizes=tuple(metadata["hidden_sizes"]),
         device=device,
     )
 
@@ -107,7 +101,8 @@ def play(
 
     for episode in range(1, num_episodes + 1):
         state, _ = env.reset()
-        episode_reward = 0
+        state = np.asarray(state, dtype=np.float32).reshape(-1)
+        episode_reward = 0.0
         episode_length = 0
         done = False
 
@@ -117,15 +112,14 @@ def play(
 
             action = agent.select_action(state, evaluate=True)
             state, reward, terminated, truncated, _ = env.step(action)
+            state = np.asarray(state, dtype=np.float32).reshape(-1)
             done = terminated or truncated
 
             episode_reward += reward
             episode_length += 1
 
         total_rewards.append(episode_reward)
-        print(
-            f"Episode {episode}: reward={episode_reward:.1f}, length={episode_length}"
-        )
+        print(f"Episode {episode}: reward={episode_reward:.1f}, length={episode_length}")
 
     env.close()
 
@@ -134,82 +128,6 @@ def play(
     print(f"Std reward: {np.std(total_rewards):.1f}")
     print(f"Min reward: {np.min(total_rewards):.1f}")
     print(f"Max reward: {np.max(total_rewards):.1f}")
-
-
-def record_video(
-    env_name: str = "ALE/Pong-v5",
-    model_path: str | None = None,
-    num_episodes: int = 3,
-    output_dir: str = "videos",
-    fps: int = 30,
-    frame_stack: int = 4,
-    frame_size: tuple[int, int] = (84, 84),
-):
-    """把智能体的行为录制成 mp4 视频。"""
-    import cv2
-
-    if model_path is not None and not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model file does not exist: {model_path}")
-
-    os.makedirs(output_dir, exist_ok=True)
-    input_channels, input_shape = infer_model_metadata(
-        model_path, frame_stack, frame_size
-    )
-
-    env = make_env(
-        env_name,
-        render_mode="rgb_array",
-        frame_stack=input_channels,
-        frame_size=input_shape,
-        clip_reward=False,
-        terminal_on_life_loss=False,
-    )
-
-    agent = DQNAgent(
-        num_actions=env.action_space.n,
-        input_channels=input_channels,
-        input_shape=input_shape,
-        device="cpu",
-    )
-
-    if model_path:
-        agent.load(model_path)
-
-    agent.eval_mode()
-
-    for episode in range(1, num_episodes + 1):
-        state, _ = env.reset()
-        frames = []
-        done = False
-        episode_reward = 0
-
-        while not done:
-            frame = env.render()
-            if frame is not None:
-                frames.append(frame)
-
-            action = agent.select_action(state, evaluate=True)
-            state, reward, terminated, truncated, _ = env.step(action)
-            done = terminated or truncated
-            episode_reward += reward
-
-        if frames:
-            safe_name = env_name.replace("/", "_").replace(":", "_")
-            video_path = os.path.join(
-                output_dir, f"{safe_name}_ep{episode}_reward{episode_reward:.0f}.mp4"
-            )
-
-            height, width = frames[0].shape[:2]
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            out = cv2.VideoWriter(video_path, fourcc, fps, (width, height))
-
-            for frame in frames:
-                out.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-
-            out.release()
-            print(f"Saved {video_path} (reward: {episode_reward:.1f})")
-
-    env.close()
 
 
 def resolve_default_model_path(config: DQNConfig) -> str | None:
@@ -230,30 +148,16 @@ def resolve_default_model_path(config: DQNConfig) -> str | None:
 
 def main():
     config = DQNConfig()
-    core = config.core
-    evaluation = config.evaluation
-    preprocess = config.preprocess
-    playback = config.playback
     model_path = resolve_default_model_path(config)
-
-    if playback.save_video:
-        record_video(
-            env_name=core.env_name,
-            model_path=model_path,
-            num_episodes=evaluation.eval_episodes,
-            output_dir=playback.video_dir,
-            frame_stack=preprocess.frame_stack,
-            frame_size=preprocess.frame_size,
-        )
-    else:
-        play(
-            env_name=core.env_name,
-            model_path=model_path,
-            num_episodes=evaluation.eval_episodes,
-            render=playback.render,
-            frame_stack=preprocess.frame_stack,
-            frame_size=preprocess.frame_size,
-        )
+    play(
+        env_name=config.core.env_name,
+        env_family=config.core.env_family,
+        obs_encoding=config.replay.obs_encoding,
+        model_path=model_path,
+        num_episodes=config.evaluation.eval_episodes,
+        render=config.playback.render,
+        hidden_sizes=config.training.hidden_sizes,
+    )
 
 
 if __name__ == "__main__":
