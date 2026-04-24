@@ -610,7 +610,13 @@ class TrexEnv(gym.Env):
         return [self.action_meanings[index] for index in range(self.action_space.n)]
 
     def close(self):
-        pygame.quit()
+        global _screen, _clock, _display_ready
+
+        if self.render_mode == "human" and pygame.display.get_surface() is not None:
+            pygame.display.quit()
+            _screen = None
+            _clock = None
+            _display_ready = False
 
 
 def register_trex_envs():

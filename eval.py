@@ -3,11 +3,11 @@ from DQN.evaluation import evaluate
 
 def main() -> None:
     result = evaluate(
-        env_name="taxi",
-        algo_name="dqn",
-        render=False,
+        env_name="dino",
+        algo_name="perdqn",
+        render=True,
         # seed=42,
-        model_path_override="results\\models\\taxi_dqn_best.pth",
+        model_path_override="results\\models\\dino_perdqn_best.pth",
     )
     print(result)
 

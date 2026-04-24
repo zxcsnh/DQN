@@ -7,12 +7,12 @@ from .dqn_agent import DQNAgent
 
 
 class PERDQNAgent(DQNAgent):
-    def __init__(self, state_dim: int, action_dim: int, common_config, per_config, env_config, env_name: str) -> None:
-        super().__init__(state_dim, action_dim, common_config, env_config, env_name, algo_name="perdqn")
+    def __init__(self, state_dim: int, action_dim: int, env_config, per_config, env_name: str) -> None:
+        super().__init__(state_dim, action_dim, env_config, env_name, algo_name="perdqn")
         self.beta = per_config.beta_start
         self.beta_increment = per_config.beta_increment
         self.replay_buffer = PrioritizedReplayBuffer(
-            common_config.replay_buffer_size,
+            env_config.replay_buffer_size,
             alpha=per_config.alpha,
             priority_epsilon=per_config.priority_epsilon,
         )

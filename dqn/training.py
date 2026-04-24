@@ -5,7 +5,7 @@ from collections import deque
 import numpy as np
 from tqdm import trange
 
-from config import COMMON_CONFIG, LOGS_DIR, MODELS_DIR, PER_CONFIG, ensure_result_dirs, get_env_config, supported_envs
+from config import LOGS_DIR, MODELS_DIR, PER_CONFIG, ensure_result_dirs, get_env_config, supported_envs
 from .agents import DQNAgent, PERDQNAgent
 from .evaluation import evaluate_agent
 from .envs import make_env
@@ -24,8 +24,8 @@ def validate_names(env_name: str, algo_name: str) -> None:
 def make_agent(env_name: str, algo_name: str, state_dim: int, action_dim: int):
     env_config = get_env_config(env_name)
     if algo_name == "dqn":
-        return DQNAgent(state_dim, action_dim, COMMON_CONFIG, env_config, env_name, algo_name="dqn")
-    return PERDQNAgent(state_dim, action_dim, COMMON_CONFIG, PER_CONFIG, env_config, env_name)
+        return DQNAgent(state_dim, action_dim, env_config, env_name, algo_name="dqn")
+    return PERDQNAgent(state_dim, action_dim, env_config, PER_CONFIG, env_name)
 
 
 def compute_episode_metrics(env_name: str, episode_reward: float, info: dict, terminated: bool) -> tuple[int, float]:
@@ -53,10 +53,10 @@ def train(
 ) -> dict:
     validate_names(env_name, algo_name)
     ensure_result_dirs()
-    run_seed = COMMON_CONFIG.seed if seed is None else seed
+    env_config = get_env_config(env_name)
+    run_seed = env_config.seed if seed is None else seed
     set_global_seed(run_seed)
 
-    env_config = get_env_config(env_name)
     if env_config.eval_interval_episodes < 1:
         raise ValueError("eval_interval_episodes 必须大于等于 1")
     if env_config.eval_episodes < 1:
@@ -196,7 +196,7 @@ def train(
         dqn_log = LOGS_DIR / f"{env_name}_dqn_train_log.csv"
         perdqn_log = LOGS_DIR / f"{env_name}_perdqn_train_log.csv"
         if dqn_log.exists() and perdqn_log.exists():
-            plot_env_comparisons(env_name, dqn_log, perdqn_log, COMMON_CONFIG.moving_average_window)
+            plot_env_comparisons(env_name, dqn_log, perdqn_log, env_config.moving_average_window)
 
     return {
         "env_name": env_name,

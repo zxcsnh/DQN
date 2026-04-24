@@ -17,7 +17,6 @@ class DQNAgent:
         self,
         state_dim: int,
         action_dim: int,
-        common_config,
         env_config,
         env_name: str,
         algo_name: str = "dqn",
@@ -25,27 +24,27 @@ class DQNAgent:
     ) -> None:
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.gamma = common_config.gamma
-        self.batch_size = common_config.batch_size
+        self.gamma = env_config.gamma
+        self.batch_size = env_config.batch_size
         self.min_replay_size = int(env_config.min_replay_size)
-        self.epsilon_start = common_config.epsilon_start
+        self.epsilon_start = env_config.epsilon_start
         self.epsilon = self.epsilon_start
-        self.epsilon_end = common_config.epsilon_end
+        self.epsilon_end = env_config.epsilon_end
         self.epsilon_decay_steps = max(1, int(env_config.epsilon_decay_steps))
-        self.target_update_freq = common_config.target_update_freq
-        self.gradient_clip_norm = common_config.gradient_clip_norm
+        self.target_update_freq = env_config.target_update_freq
+        self.gradient_clip_norm = env_config.gradient_clip_norm
         self.env_name = env_name
         self.algo_name = algo_name
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
 
-        self.q_network = QNetwork(state_dim, action_dim, common_config.hidden_dim).to(self.device)
-        self.target_q_network = QNetwork(state_dim, action_dim, common_config.hidden_dim).to(self.device)
+        self.q_network = QNetwork(state_dim, action_dim, env_config.hidden_dim).to(self.device)
+        self.target_q_network = QNetwork(state_dim, action_dim, env_config.hidden_dim).to(self.device)
         self.target_q_network.load_state_dict(self.q_network.state_dict())
         self.target_q_network.eval()
 
-        self.optimizer = Adam(self.q_network.parameters(), lr=common_config.learning_rate)
+        self.optimizer = Adam(self.q_network.parameters(), lr=env_config.learning_rate)
         self.loss_fn = nn.SmoothL1Loss(reduction="none")
-        self.replay_buffer = ReplayBuffer(common_config.replay_buffer_size)
+        self.replay_buffer = ReplayBuffer(env_config.replay_buffer_size)
         self.train_steps = 0
 
     def select_action(self, state: np.ndarray, training: bool = True) -> int:

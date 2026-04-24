@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from config import COMMON_CONFIG, MODELS_DIR, get_env_config
+from config import MODELS_DIR, get_env_config
 from .envs import make_env
 from .utils.seed_utils import seed_env, set_global_seed
 from .utils.state_processor import get_state_dim, process_state
@@ -42,7 +42,8 @@ def evaluate_agent(
     if episodes < 1:
         raise ValueError("评估轮数必须大于等于 1")
 
-    run_seed = COMMON_CONFIG.seed if seed is None else seed
+    env_config = get_env_config(env_name)
+    run_seed = env_config.seed if seed is None else seed
     env = make_env(env_name, render=render)
     seed_env(env, run_seed)
 
@@ -50,7 +51,6 @@ def evaluate_agent(
     steps_list = []
     successes = []
     metrics = []
-    env_config = get_env_config(env_name)
 
     for episode_idx in range(episodes):
         raw_state, _ = env.reset(seed=run_seed + episode_idx)
@@ -100,7 +100,8 @@ def evaluate(
     model_path_override: str | Path | None = None,
 ) -> dict:
     _validate_names(env_name, algo_name)
-    run_seed = COMMON_CONFIG.seed if seed is None else seed
+    env_config = get_env_config(env_name)
+    run_seed = env_config.seed if seed is None else seed
     set_global_seed(run_seed)
 
     env = make_env(env_name, render=render)
@@ -127,7 +128,7 @@ def evaluate(
         env_name=env_name,
         algo_name=algo_name,
         agent=agent,
-        episodes=COMMON_CONFIG.test_episodes,
+        episodes=env_config.test_episodes,
         render=render,
         seed=run_seed,
     )
