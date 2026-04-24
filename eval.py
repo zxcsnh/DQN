@@ -6,7 +6,8 @@ def main() -> None:
         env_name="taxi",
         algo_name="dqn",
         render=False,
-        use_best_model=True,
+        # seed=42,
+        model_path_override="results\\models\\taxi_dqn_best.pth",
     )
     print(result)
 

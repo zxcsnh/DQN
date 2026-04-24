@@ -6,8 +6,22 @@ import numpy as np
 MOUNTAINCAR_LOW = np.array([-1.2, -0.07], dtype=np.float32)
 MOUNTAINCAR_HIGH = np.array([0.6, 0.07], dtype=np.float32)
 
-DINO_LOW = np.array([0.0, -20.0, 0.0, 0.0, 20.0, 10.0, 5.0], dtype=np.float32)
-DINO_HIGH = np.array([200.0, 20.0, 1.0, 600.0, 120.0, 80.0, 20.0], dtype=np.float32)
+DINO_LOW = np.array(
+    [
+        0.0, -20.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0,
+    ],
+    dtype=np.float32,
+)
+DINO_HIGH = np.array(
+    [
+        150.0, 20.0, 1.0, 1.0, 100.0,
+        1.0, 600.0, 600.0, 150.0, 150.0,
+        1.0, 600.0, 600.0, 150.0, 150.0,
+    ],
+    dtype=np.float32,
+)
 
 
 def one_hot(index: int, size: int) -> np.ndarray:
@@ -29,7 +43,9 @@ def get_state_dim(env_name: str, env=None) -> int:
     if env_name == "mountaincar":
         return 2
     if env_name == "dino":
-        return 7
+        if env is None:
+            return int(DINO_LOW.size)
+        return int(np.prod(env.observation_space.shape))
     raise ValueError(f"不支持的环境名称: {env_name}")
 
 
@@ -46,6 +62,8 @@ def process_state(env_name: str, state, env=None) -> np.ndarray:
 
     if env_name == "dino":
         state_array = np.asarray(state, dtype=np.float32)
-        return normalize_vector(state_array, DINO_LOW, DINO_HIGH)
+        if env is None:
+            return normalize_vector(state_array, DINO_LOW, DINO_HIGH)
+        return normalize_vector(state_array, env.observation_space.low, env.observation_space.high)
 
     raise ValueError(f"不支持的环境名称: {env_name}")

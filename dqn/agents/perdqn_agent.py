@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import torch
 
@@ -21,7 +21,9 @@ class PERDQNAgent(DQNAgent):
         if len(self.replay_buffer) < max(self.min_replay_size, self.batch_size):
             return None
 
-        states, actions, rewards, next_states, dones, indices, weights = self.replay_buffer.sample(self.batch_size, beta=self.beta)
+        states, actions, rewards, next_states, dones, indices, weights = self.replay_buffer.sample(
+            self.batch_size, beta=self.beta
+        )
         states_t = torch.as_tensor(states, dtype=torch.float32, device=self.device)
         actions_t = torch.as_tensor(actions, dtype=torch.int64, device=self.device).unsqueeze(1)
         rewards_t = torch.as_tensor(rewards, dtype=torch.float32, device=self.device)
@@ -34,7 +36,7 @@ class PERDQNAgent(DQNAgent):
             next_q = self.target_q_network(next_states_t).max(dim=1).values
             target_q = rewards_t + self.gamma * next_q * (1.0 - dones_t)
 
-        # PER-DQN 会优先关注 TD 误差更大的样本，并用重要性采样权重校正偏差。
+        # PER samples by priority and uses IS weights to reduce bias.
         td_errors = target_q - current_q
         loss = (self.loss_fn(current_q, target_q) * weights_t).mean()
 
@@ -49,6 +51,6 @@ class PERDQNAgent(DQNAgent):
         if self.train_steps % self.target_update_freq == 0:
             self.target_q_network.load_state_dict(self.q_network.state_dict())
 
-        self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
+        self._update_epsilon()
         self.beta = min(1.0, self.beta + self.beta_increment)
         return float(loss.item())

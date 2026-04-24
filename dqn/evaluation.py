@@ -1,52 +1,66 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
 import numpy as np
 
-from config import COMMON_CONFIG, ENV_CONFIGS, MODELS_DIR
+from config import COMMON_CONFIG, MODELS_DIR, get_env_config
 from .envs import make_env
-from .training import compute_episode_metrics, make_agent, validate_names
 from .utils.seed_utils import seed_env, set_global_seed
 from .utils.state_processor import get_state_dim, process_state
 
 
-def evaluate(env_name: str, algo_name: str, render: bool = False, use_best_model: bool = True, seed: int | None = None, model_suffix_override: str = "") -> dict:
-    # 评估入口：加载训练好的模型，并统计平均性能指标。
-    validate_names(env_name, algo_name)
-    run_seed = COMMON_CONFIG.seed if seed is None else seed
-    set_global_seed(run_seed)
+def _training_helpers():
+    from .training import compute_episode_metrics, make_agent, validate_names
 
+    return compute_episode_metrics, make_agent, validate_names
+
+
+def _episode_metrics(env_name: str, total_reward: float, info: dict, terminated: bool):
+    compute_episode_metrics, _, _ = _training_helpers()
+    return compute_episode_metrics(env_name, total_reward, info, terminated)
+
+
+def _make_agent(env_name: str, algo_name: str, state_dim: int, action_dim: int):
+    _, make_agent, _ = _training_helpers()
+    return make_agent(env_name, algo_name, state_dim, action_dim)
+
+
+def _validate_names(env_name: str, algo_name: str) -> None:
+    _, _, validate_names = _training_helpers()
+    validate_names(env_name, algo_name)
+
+
+def evaluate_agent(
+    env_name: str,
+    algo_name: str,
+    agent,
+    episodes: int,
+    render: bool = False,
+    seed: int | None = None,
+) -> dict:
+    if episodes < 1:
+        raise ValueError("评估轮数必须大于等于 1")
+
+    run_seed = COMMON_CONFIG.seed if seed is None else seed
     env = make_env(env_name, render=render)
     seed_env(env, run_seed)
-
-    state_dim = get_state_dim(env_name, env)
-    action_dim = int(env.action_space.n)
-    agent = make_agent(env_name, algo_name, state_dim, action_dim)
-
-    base_suffix = model_suffix_override if model_suffix_override else ("best" if use_best_model else "final")
-    model_path = MODELS_DIR / f"{env_name}_{algo_name}_{base_suffix}.pth"
-    if not model_path.exists():
-        raise FileNotFoundError(f"未找到模型文件: {model_path}")
-
-    agent.load(model_path)
-    agent.epsilon = 0.0
 
     rewards = []
     steps_list = []
     successes = []
     metrics = []
-    env_config = ENV_CONFIGS[env_name]
+    env_config = get_env_config(env_name)
 
-    for _ in range(COMMON_CONFIG.test_episodes):
-        raw_state, _ = env.reset()
+    for episode_idx in range(episodes):
+        raw_state, _ = env.reset(seed=run_seed + episode_idx)
         state = process_state(env_name, raw_state, env)
         total_reward = 0.0
         terminated = False
         info = {}
         max_position = -1.2
 
-        for step in range(1, env_config["max_steps"] + 1):
+        for step in range(1, env_config.max_steps_per_episode + 1):
             action = agent.select_action(state, training=False)
             next_raw_state, reward, terminated, truncated, info = env.step(action)
             state = process_state(env_name, next_raw_state, env)
@@ -59,7 +73,7 @@ def evaluate(env_name: str, algo_name: str, render: bool = False, use_best_model
             if terminated or truncated:
                 break
 
-        success, metric = compute_episode_metrics(env_name, total_reward, info, terminated)
+        success, metric = _episode_metrics(env_name, total_reward, info, terminated)
         rewards.append(total_reward)
         steps_list.append(step)
         successes.append(success)
@@ -73,5 +87,52 @@ def evaluate(env_name: str, algo_name: str, render: bool = False, use_best_model
         "avg_steps": float(np.mean(steps_list)),
         "success_rate": float(np.mean(successes)),
         "avg_custom_metric": float(np.mean(metrics)),
-        "model_path": str(model_path),
     }
+
+
+def evaluate(
+    env_name: str,
+    algo_name: str,
+    render: bool = False,
+    use_best_model: bool = True,
+    seed: int | None = None,
+    model_suffix_override: str = "",
+    model_path_override: str | Path | None = None,
+) -> dict:
+    _validate_names(env_name, algo_name)
+    run_seed = COMMON_CONFIG.seed if seed is None else seed
+    set_global_seed(run_seed)
+
+    env = make_env(env_name, render=render)
+    seed_env(env, run_seed)
+
+    state_dim = get_state_dim(env_name, env)
+    action_dim = int(env.action_space.n)
+    agent = _make_agent(env_name, algo_name, state_dim, action_dim)
+    env.close()
+
+    if model_path_override is not None:
+        model_path = Path(model_path_override)
+    else:
+        base_suffix = model_suffix_override if model_suffix_override else ("best" if use_best_model else "final")
+        model_path = MODELS_DIR / f"{env_name}_{algo_name}_{base_suffix}.pth"
+
+    if not model_path.exists():
+        raise FileNotFoundError(f"未找到模型文件: {model_path}")
+
+    agent.load(model_path)
+    agent.epsilon = 0.0
+
+    metrics = evaluate_agent(
+        env_name=env_name,
+        algo_name=algo_name,
+        agent=agent,
+        episodes=COMMON_CONFIG.test_episodes,
+        render=render,
+        seed=run_seed,
+    )
+    metrics["model_path"] = str(model_path)
+    return metrics
+
+
+__all__ = ["evaluate", "evaluate_agent"]

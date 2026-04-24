@@ -16,6 +16,11 @@ class CSVLogger:
             "loss",
             "success",
             "custom_metric",
+            "eval_avg_reward",
+            "eval_avg_steps",
+            "eval_success_rate",
+            "eval_avg_custom_metric",
+            "is_best_model",
         ]
         with self.file_path.open("w", newline="", encoding="utf-8") as csv_file:
             writer = csv.DictWriter(csv_file, fieldnames=self.fieldnames)

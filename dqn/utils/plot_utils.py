@@ -44,7 +44,7 @@ def moving_average(values: np.ndarray, window: int) -> np.ndarray:
 
 
 def plot_comparison(log_path_a: Path, log_path_b: Path, env_name: str, metric: str, output_name: str, window: int = 50) -> None:
-    # 使用滑动平均让论文中的训练曲线更平滑，更便于观察趋势。
+    # 使用滑动平均让训练曲线更平滑，便于观察 DQN 与 PER-DQN 的趋势差异。
     values_a = moving_average(_read_column(log_path_a, metric), window)
     values_b = moving_average(_read_column(log_path_b, metric), window)
 

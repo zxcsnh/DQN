@@ -11,3 +11,4 @@ videos/
 .venv
 CLAUDE.md
 .claude/
+results/

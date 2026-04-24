@@ -9,8 +9,8 @@ TRAIN_CONFIG = {
 
 def main() -> None:
     result = train(
-        env_name="taxi",
-        algo_name="dqn",
+        env_name="dino",
+        algo_name="perdqn",
         render=False,
         plot_after_train=True,
     )

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import random
 from pathlib import Path
@@ -27,10 +27,11 @@ class DQNAgent:
         self.action_dim = action_dim
         self.gamma = common_config.gamma
         self.batch_size = common_config.batch_size
-        self.min_replay_size = int(env_config["min_replay_size"])
-        self.epsilon = common_config.epsilon_start
+        self.min_replay_size = int(env_config.min_replay_size)
+        self.epsilon_start = common_config.epsilon_start
+        self.epsilon = self.epsilon_start
         self.epsilon_end = common_config.epsilon_end
-        self.epsilon_decay = float(env_config["epsilon_decay"])
+        self.epsilon_decay_steps = max(1, int(env_config.epsilon_decay_steps))
         self.target_update_freq = common_config.target_update_freq
         self.gradient_clip_norm = common_config.gradient_clip_norm
         self.env_name = env_name
@@ -48,7 +49,6 @@ class DQNAgent:
         self.train_steps = 0
 
     def select_action(self, state: np.ndarray, training: bool = True) -> int:
-        # 训练时使用 epsilon-greedy，评估时关闭随机探索。
         if training and random.random() < self.epsilon:
             return random.randrange(self.action_dim)
 
@@ -59,6 +59,10 @@ class DQNAgent:
 
     def store_transition(self, state, action, reward, next_state, done) -> None:
         self.replay_buffer.push(state, action, reward, next_state, done)
+
+    def _update_epsilon(self) -> None:
+        progress = min(1.0, self.train_steps / self.epsilon_decay_steps)
+        self.epsilon = self.epsilon_start + (self.epsilon_end - self.epsilon_start) * progress
 
     def update(self):
         if len(self.replay_buffer) < max(self.min_replay_size, self.batch_size):
@@ -86,7 +90,7 @@ class DQNAgent:
         if self.train_steps % self.target_update_freq == 0:
             self.target_q_network.load_state_dict(self.q_network.state_dict())
 
-        self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
+        self._update_epsilon()
         return float(loss.item())
 
     def save(self, path) -> None:
