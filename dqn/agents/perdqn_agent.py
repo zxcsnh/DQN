@@ -18,6 +18,8 @@ class PERDQNAgent(DQNAgent):
         )
 
     def update(self):
+        if self.env_steps < self.warmup_steps:
+            return None
         if len(self.replay_buffer) < max(self.min_replay_size, self.batch_size):
             return None
 
@@ -33,7 +35,11 @@ class PERDQNAgent(DQNAgent):
 
         current_q = self.q_network(states_t).gather(1, actions_t).squeeze(1)
         with torch.no_grad():
-            next_q = self.target_q_network(next_states_t).max(dim=1).values
+            if self.use_double_dqn:
+                next_actions = self.q_network(next_states_t).argmax(dim=1, keepdim=True)
+                next_q = self.target_q_network(next_states_t).gather(1, next_actions).squeeze(1)
+            else:
+                next_q = self.target_q_network(next_states_t).max(dim=1).values
             target_q = rewards_t + self.gamma * next_q * (1.0 - dones_t)
 
         # PER samples by priority and uses IS weights to reduce bias.

@@ -5,42 +5,13 @@ from collections import deque
 import numpy as np
 from tqdm import trange
 
-from config import LOGS_DIR, MODELS_DIR, PER_CONFIG, ensure_result_dirs, get_env_config, supported_envs
-from .agents import DQNAgent, PERDQNAgent
+from config import LOGS_DIR, MODELS_DIR, ensure_result_dirs, get_env_config
 from .evaluation import evaluate_agent
 from .envs import make_env
+from .shared import compute_episode_metrics, make_agent, validate_names
 from .utils.logger import CSVLogger
 from .utils.seed_utils import seed_env, set_global_seed
 from .utils.state_processor import get_state_dim, process_state
-
-
-def validate_names(env_name: str, algo_name: str) -> None:
-    if env_name not in supported_envs():
-        raise ValueError(f"不支持的环境名称: {env_name}，可选值为 {supported_envs()}")
-    if algo_name not in {"dqn", "perdqn"}:
-        raise ValueError(f"不支持的算法名称: {algo_name}")
-
-
-def make_agent(env_name: str, algo_name: str, state_dim: int, action_dim: int):
-    env_config = get_env_config(env_name)
-    if algo_name == "dqn":
-        return DQNAgent(state_dim, action_dim, env_config, env_name, algo_name="dqn")
-    return PERDQNAgent(state_dim, action_dim, env_config, PER_CONFIG, env_name)
-
-
-def compute_episode_metrics(env_name: str, episode_reward: float, info: dict, terminated: bool) -> tuple[int, float]:
-    if env_name == "taxi":
-        success = 1 if episode_reward > 0 and terminated else 0
-        return success, float(success)
-
-    if env_name == "mountaincar":
-        max_position = float(info.get("max_position", -1.2))
-        success = 1 if max_position >= 0.5 else 0
-        return success, max_position
-
-    obstacles_cleared = float(info.get("obstacles_cleared", 0))
-    success = 1 if obstacles_cleared >= get_env_config(env_name).success_threshold else 0
-    return success, obstacles_cleared
 
 
 def train(
@@ -191,12 +162,9 @@ def train(
     env.close()
 
     if plot_after_train:
-        from .utils.plot_utils import plot_env_comparisons
+        from .utils.plot_utils import plot_single_run
 
-        dqn_log = LOGS_DIR / f"{env_name}_dqn_train_log.csv"
-        perdqn_log = LOGS_DIR / f"{env_name}_perdqn_train_log.csv"
-        if dqn_log.exists() and perdqn_log.exists():
-            plot_env_comparisons(env_name, dqn_log, perdqn_log, env_config.moving_average_window)
+        plot_single_run(log_path, env_name, algo_name, env_config.moving_average_window)
 
     return {
         "env_name": env_name,

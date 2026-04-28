@@ -6,29 +6,9 @@ import numpy as np
 
 from config import MODELS_DIR, get_env_config
 from .envs import make_env
+from .shared import compute_episode_metrics as _episode_metrics_raw, make_agent as _make_agent, validate_names as _validate_names
 from .utils.seed_utils import seed_env, set_global_seed
 from .utils.state_processor import get_state_dim, process_state
-
-
-def _training_helpers():
-    from .training import compute_episode_metrics, make_agent, validate_names
-
-    return compute_episode_metrics, make_agent, validate_names
-
-
-def _episode_metrics(env_name: str, total_reward: float, info: dict, terminated: bool):
-    compute_episode_metrics, _, _ = _training_helpers()
-    return compute_episode_metrics(env_name, total_reward, info, terminated)
-
-
-def _make_agent(env_name: str, algo_name: str, state_dim: int, action_dim: int):
-    _, make_agent, _ = _training_helpers()
-    return make_agent(env_name, algo_name, state_dim, action_dim)
-
-
-def _validate_names(env_name: str, algo_name: str) -> None:
-    _, _, validate_names = _training_helpers()
-    validate_names(env_name, algo_name)
 
 
 def evaluate_agent(
@@ -73,7 +53,7 @@ def evaluate_agent(
             if terminated or truncated:
                 break
 
-        success, metric = _episode_metrics(env_name, total_reward, info, terminated)
+        success, metric = _episode_metrics_raw(env_name, total_reward, info, terminated)
         rewards.append(total_reward)
         steps_list.append(step)
         successes.append(success)

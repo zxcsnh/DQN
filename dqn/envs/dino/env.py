@@ -8,63 +8,27 @@ from gymnasium import spaces
 from gymnasium.envs.registration import register, registry
 from pygame import RLEACCEL
 
-pygame.mixer.pre_init(44100, -16, 2, 2048)
-pygame.init()
-
 scr_size = (width, height) = (600, 150)
 FPS = 60
 gravity = 0.6
 background_col = (235, 235, 235)
 GROUND_Y = int(0.98 * height)
 
-_screen = None
-_clock = None
-_display_caption = "T-Rex Rush"
-_display_ready = False
 SPRITES_DIR = Path(__file__).resolve().parent / "sprites"
 
-
-def ensure_pygame_display():
-    global _screen, _clock, _display_ready
-    if not _display_ready or pygame.display.get_surface() is None:
-        _screen = pygame.display.set_mode(scr_size)
-        pygame.display.set_caption(_display_caption)
-        _display_ready = True
-    else:
-        _screen = pygame.display.get_surface()
-    if _clock is None:
-        _clock = pygame.time.Clock()
-    return _screen
+_pygame_initialized = False
 
 
-def get_screen():
-    return ensure_pygame_display()
-
-
-def get_clock():
-    global _clock
-    if _clock is None:
-        _clock = pygame.time.Clock()
-    return _clock
-
-
-def load_sound(name):
-    if pygame.mixer.get_init() is None:
-        return None
-
-    fullname = SPRITES_DIR / name
-    try:
-        return pygame.mixer.Sound(str(fullname))
-    except (pygame.error, FileNotFoundError):
-        return None
-
-
-jump_sound = load_sound("jump.wav")
-die_sound = load_sound("die.wav")
-checkPoint_sound = load_sound("checkPoint.wav")
+def _lazy_init_pygame():
+    global _pygame_initialized
+    if not _pygame_initialized:
+        pygame.mixer.pre_init(44100, -16, 2, 2048)
+        pygame.init()
+        _pygame_initialized = True
 
 
 def load_image(name, sizex=-1, sizey=-1, colorkey=None):
+    _lazy_init_pygame()
     fullname = SPRITES_DIR / name
     image = pygame.image.load(str(fullname))
     if pygame.display.get_surface() is not None:
@@ -83,6 +47,7 @@ def load_image(name, sizex=-1, sizey=-1, colorkey=None):
 
 
 def load_sprite_sheet(sheetname, nx, ny, scalex=-1, scaley=-1, colorkey=None):
+    _lazy_init_pygame()
     fullname = SPRITES_DIR / sheetname
     sheet = pygame.image.load(str(fullname))
     if pygame.display.get_surface() is not None:
@@ -115,8 +80,35 @@ def load_sprite_sheet(sheetname, nx, ny, scalex=-1, scaley=-1, colorkey=None):
     return sprites, sprite_rect
 
 
-def disp_gameOver_msg(retbutton_image, gameover_image):
-    screen = get_screen()
+def load_sound(name):
+    _lazy_init_pygame()
+    if pygame.mixer.get_init() is None:
+        return None
+
+    fullname = SPRITES_DIR / name
+    try:
+        return pygame.mixer.Sound(str(fullname))
+    except (pygame.error, FileNotFoundError):
+        return None
+
+
+_jump_sound = None
+_die_sound = None
+_checkPoint_sound = None
+
+
+def _get_sounds():
+    global _jump_sound, _die_sound, _checkPoint_sound
+    if _jump_sound is None:
+        _jump_sound = load_sound("jump.wav")
+        _die_sound = load_sound("die.wav")
+        _checkPoint_sound = load_sound("checkPoint.wav")
+    return _jump_sound, _die_sound, _checkPoint_sound
+
+
+
+
+def disp_gameOver_msg(screen, retbutton_image, gameover_image):
     retbutton_rect = retbutton_image.get_rect()
     retbutton_rect.centerx = width // 2
     retbutton_rect.top = int(height * 0.52)
@@ -166,8 +158,8 @@ class Dino(pygame.sprite.Sprite):
         self.stand_pos_width = self.rect.width
         self.duck_pos_width = self.rect1.width
 
-    def draw(self):
-        get_screen().blit(self.image, self.rect)
+    def draw(self, screen):
+        screen.blit(self.image, self.rect)
 
     def checkbounds(self):
         if self.rect.bottom > GROUND_Y:
@@ -211,8 +203,10 @@ class Dino(pygame.sprite.Sprite):
 
         if not self.isDead and self.counter % 7 == 6 and not self.isBlinking:
             self.score += 1
-            if self.score % 100 == 0 and self.score != 0 and checkPoint_sound is not None:
-                checkPoint_sound.play()
+            if self.score % 100 == 0 and self.score != 0:
+                _, _, checkPoint_sound = _get_sounds()
+                if checkPoint_sound is not None:
+                    checkPoint_sound.play()
 
         self.counter += 1
 
@@ -266,8 +260,7 @@ class Ground:
         self.rect1.left = self.rect.right
         self.speed = speed
 
-    def draw(self):
-        screen = get_screen()
+    def draw(self, screen):
         screen.blit(self.image, self.rect)
         screen.blit(self.image1, self.rect1)
 
@@ -311,8 +304,8 @@ class Scoreboard:
         else:
             self.rect.top = y
 
-    def draw(self):
-        get_screen().blit(self.image, self.rect)
+    def draw(self, screen):
+        screen.blit(self.image, self.rect)
 
     def update(self, score):
         score_digits = extractDigits(score)
@@ -326,6 +319,34 @@ class Scoreboard:
 class TrexEnv(gym.Env):
     metadata = {"render_modes": [None, "human"], "render_fps": FPS}
     action_meanings = {0: "noop", 1: "jump", 2: "duck"}
+
+    _screen = None
+    _clock = None
+    _display_ready = False
+    _display_caption = "T-Rex Rush"
+
+    @classmethod
+    def _ensure_display(cls):
+        _lazy_init_pygame()
+        if not cls._display_ready or pygame.display.get_surface() is None:
+            cls._screen = pygame.display.set_mode(scr_size)
+            pygame.display.set_caption(cls._display_caption)
+            cls._display_ready = True
+        else:
+            cls._screen = pygame.display.get_surface()
+        if cls._clock is None:
+            cls._clock = pygame.time.Clock()
+        return cls._screen
+
+    @classmethod
+    def _get_screen(cls):
+        return cls._ensure_display()
+
+    @classmethod
+    def _get_clock(cls):
+        if cls._clock is None:
+            cls._clock = pygame.time.Clock()
+        return cls._clock
 
     def __init__(self, render_mode=None, max_episode_steps=5000, max_steps=None):
         super().__init__()
@@ -368,7 +389,7 @@ class TrexEnv(gym.Env):
         self.obstacles_cleared = 0
 
         if self.render_mode == "human":
-            ensure_pygame_display()
+            TrexEnv._ensure_display()
         self.replay_button_image, _ = load_image("replay_button.png", 35, 31, -1)
         self.gameover_image, _ = load_image("game_over.png", 190, 11, -1)
         number_images, number_rect = load_sprite_sheet("numbers.png", 12, 1, 11, int(11 * 6 / 5), -1)
@@ -413,22 +434,26 @@ class TrexEnv(gym.Env):
         return observation, info
 
     def _play_die_sound(self):
-        if die_sound is not None and self.render_mode == "human":
-            die_sound.play()
+        if self.render_mode == "human":
+            _, die_sound, _ = _get_sounds()
+            if die_sound is not None:
+                die_sound.play()
 
     def _jump(self):
         if self.playerDino.rect.bottom == GROUND_Y:
             self.playerDino.isJumping = True
             self.playerDino.movement[1] = -1 * self.playerDino.jumpSpeed
-            if jump_sound is not None and self.render_mode == "human":
-                jump_sound.play()
+            if self.render_mode == "human":
+                jump_sound, _, _ = _get_sounds()
+                if jump_sound is not None:
+                    jump_sound.play()
 
     def _apply_action(self, action):
         if not self.action_space.contains(action):
             raise ValueError(f"Unsupported action: {action}")
 
         self.playerDino.isDucking = action == 2 and not self.playerDino.isDead
-        if action == 1:
+        if action == 1 and not self.playerDino.isDead:
             self._jump()
 
     def _update_obstacles(self):
@@ -538,13 +563,15 @@ class TrexEnv(gym.Env):
             "counter": self.counter,
         }
 
-    def _compute_reward(self, newly_cleared):
+    def _compute_reward(self, newly_cleared, redundant_jump: bool = False):
         reward = 0.1
         if newly_cleared > 0:
-            reward += 1.0 * newly_cleared
+            reward += 2.0 * newly_cleared
             self.obstacles_cleared += newly_cleared
         if self.playerDino.isDead:
             reward -= 10.0
+        if redundant_jump:
+            reward -= 0.02
         self.last_score = self.playerDino.score
         return reward
 
@@ -554,7 +581,9 @@ class TrexEnv(gym.Env):
         if self.terminated or self.truncated:
             raise RuntimeError("Episode already ended. Call reset() before step().")
 
+        was_jumping = self.playerDino.isJumping
         self._apply_action(action)
+        redundant_jump = action == 1 and was_jumping
         self._update_obstacles()
         if not self.playerDino.isDead:
             self._spawn_obstacles()
@@ -575,48 +604,47 @@ class TrexEnv(gym.Env):
             self.truncated = True
 
         observation = self._get_obs()
-        reward = self._compute_reward(newly_cleared)
+        reward = self._compute_reward(newly_cleared, redundant_jump)
         info = self._make_info()
 
         if self.render_mode == "human":
             self.render()
-            get_clock().tick(FPS)
+            TrexEnv._get_clock().tick(FPS)
 
         return observation, reward, self.terminated, self.truncated, info
 
     def render(self):
-        screen = get_screen()
+        screen = TrexEnv._get_screen()
         screen.fill(background_col)
-        self.new_ground.draw()
+        self.new_ground.draw(screen)
         self.clouds.draw(screen)
-        self.scb.draw()
+        self.scb.draw(screen)
         if self.high_score != 0:
-            self.highsc.draw()
+            self.highsc.draw(screen)
             screen.blit(self.hi_image, self.hi_rect)
         self.cacti.draw(screen)
         self.pteras.draw(screen)
-        self.playerDino.draw()
+        self.playerDino.draw(screen)
         pygame.display.update()
 
     def render_game_over(self):
+        screen = TrexEnv._get_screen()
         self.highsc.update(self.high_score)
-        disp_gameOver_msg(self.replay_button_image, self.gameover_image)
+        disp_gameOver_msg(screen, self.replay_button_image, self.gameover_image)
         if self.high_score != 0:
-            self.highsc.draw()
-            get_screen().blit(self.hi_image, self.hi_rect)
+            self.highsc.draw(screen)
+            screen.blit(self.hi_image, self.hi_rect)
         pygame.display.update()
 
     def get_action_meanings(self):
         return [self.action_meanings[index] for index in range(self.action_space.n)]
 
     def close(self):
-        global _screen, _clock, _display_ready
-
         if self.render_mode == "human" and pygame.display.get_surface() is not None:
             pygame.display.quit()
-            _screen = None
-            _clock = None
-            _display_ready = False
+            TrexEnv._screen = None
+            TrexEnv._clock = None
+            TrexEnv._display_ready = False
 
 
 def register_trex_envs():
@@ -632,7 +660,7 @@ def register_trex_envs():
 
 
 def introscreen():
-    ensure_pygame_display()
+    TrexEnv._ensure_display()
     temp_dino = Dino(44, 47)
     temp_dino.isBlinking = True
     gameStart = False
@@ -662,16 +690,16 @@ def introscreen():
 
         temp_dino.update()
 
-        screen = get_screen()
+        screen = TrexEnv._get_screen()
         screen.fill(background_col)
         screen.blit(temp_ground[0], temp_ground_rect)
         if temp_dino.isBlinking:
             screen.blit(logo, logo_rect)
             screen.blit(callout, callout_rect)
-        temp_dino.draw()
+        temp_dino.draw(screen)
         pygame.display.update()
 
-        get_clock().tick(FPS)
+        TrexEnv._get_clock().tick(FPS)
         if not temp_dino.isJumping and not temp_dino.isBlinking:
             gameStart = True
 
@@ -718,7 +746,7 @@ def play_human():
                         if event.key in (pygame.K_RETURN, pygame.K_SPACE):
                             waiting_for_restart = False
                 env.render_game_over()
-                get_clock().tick(FPS)
+                TrexEnv._get_clock().tick(FPS)
             env.reset()
 
 

@@ -33,6 +33,8 @@ class DQNAgent:
         self.epsilon_decay_steps = max(1, int(env_config.epsilon_decay_steps))
         self.target_update_freq = env_config.target_update_freq
         self.gradient_clip_norm = env_config.gradient_clip_norm
+        self.use_double_dqn = getattr(env_config, "use_double_dqn", False)
+        self.warmup_steps = getattr(env_config, "warmup_steps", 0)
         self.env_name = env_name
         self.algo_name = algo_name
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -46,8 +48,11 @@ class DQNAgent:
         self.loss_fn = nn.SmoothL1Loss(reduction="none")
         self.replay_buffer = ReplayBuffer(env_config.replay_buffer_size)
         self.train_steps = 0
+        self.env_steps = 0
 
     def select_action(self, state: np.ndarray, training: bool = True) -> int:
+        if training and self.env_steps < self.warmup_steps:
+            return random.randrange(self.action_dim)
         if training and random.random() < self.epsilon:
             return random.randrange(self.action_dim)
 
@@ -58,12 +63,15 @@ class DQNAgent:
 
     def store_transition(self, state, action, reward, next_state, done) -> None:
         self.replay_buffer.push(state, action, reward, next_state, done)
+        self.env_steps += 1
 
     def _update_epsilon(self) -> None:
         progress = min(1.0, self.train_steps / self.epsilon_decay_steps)
         self.epsilon = self.epsilon_start + (self.epsilon_end - self.epsilon_start) * progress
 
     def update(self):
+        if self.env_steps < self.warmup_steps:
+            return None
         if len(self.replay_buffer) < max(self.min_replay_size, self.batch_size):
             return None
 
@@ -76,7 +84,11 @@ class DQNAgent:
 
         current_q = self.q_network(states_t).gather(1, actions_t).squeeze(1)
         with torch.no_grad():
-            next_q = self.target_q_network(next_states_t).max(dim=1).values
+            if self.use_double_dqn:
+                next_actions = self.q_network(next_states_t).argmax(dim=1, keepdim=True)
+                next_q = self.target_q_network(next_states_t).gather(1, next_actions).squeeze(1)
+            else:
+                next_q = self.target_q_network(next_states_t).max(dim=1).values
             target_q = rewards_t + self.gamma * next_q * (1.0 - dones_t)
 
         loss = self.loss_fn(current_q, target_q).mean()

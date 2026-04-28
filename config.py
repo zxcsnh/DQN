@@ -34,6 +34,8 @@ class Config:
     render_fps: int = 30
     moving_average_window: int = 50
     gradient_clip_norm: float = 10.0
+    use_double_dqn: bool = False
+    warmup_steps: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +110,8 @@ ENV_CONFIGS: Mapping[str, Config] = MappingProxyType(
             render_fps=30,
             moving_average_window=30,
             gradient_clip_norm=5.0,
+            use_double_dqn=True,
+            warmup_steps=5000,
         ),
     }
 )
