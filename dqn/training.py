@@ -68,20 +68,21 @@ def train(
             action = agent.select_action(state, training=True)
             next_raw_state, reward, terminated, truncated, info = env.step(action)
             next_state = process_state(env_name, next_raw_state, env)
-            done = terminated or truncated
+            episode_done = terminated or truncated
+            bootstrap_done = terminated
 
             if env_name == "mountaincar":
                 max_position = max(max_position, float(next_raw_state[0]))
                 info["max_position"] = max_position
 
-            agent.store_transition(state, action, reward, next_state, done)
+            agent.store_transition(state, action, reward, next_state, bootstrap_done)
             loss = agent.update()
             if loss is not None:
                 episode_losses.append(loss)
 
             state = next_state
             episode_reward += reward
-            if done:
+            if episode_done:
                 break
 
         success, custom_metric = compute_episode_metrics(env_name, episode_reward, info, terminated)

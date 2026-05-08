@@ -3,7 +3,7 @@ from DQN.training import train
 def main() -> None:
     result = train(
         env_name="dino",
-        algo_name="perdqn",
+        algo_name="dqn",
         render=False,
         plot_after_train=True,
     )

@@ -9,8 +9,14 @@ from .dqn_agent import DQNAgent
 class PERDQNAgent(DQNAgent):
     def __init__(self, state_dim: int, action_dim: int, env_config, per_config, env_name: str) -> None:
         super().__init__(state_dim, action_dim, env_config, env_name, algo_name="perdqn")
-        self.beta = per_config.beta_start
-        self.beta_increment = per_config.beta_increment
+        self.beta_start = per_config.beta_start
+        self.beta = self.beta_start
+        self.beta_anneal_steps = max(
+            1,
+            int(per_config.beta_anneal_steps)
+            if per_config.beta_anneal_steps is not None
+            else int(env_config.epsilon_decay_steps),
+        )
         self.replay_buffer = PrioritizedReplayBuffer(
             env_config.replay_buffer_size,
             alpha=per_config.alpha,
@@ -58,5 +64,6 @@ class PERDQNAgent(DQNAgent):
             self.target_q_network.load_state_dict(self.q_network.state_dict())
 
         self._update_epsilon()
-        self.beta = min(1.0, self.beta + self.beta_increment)
+        progress = min(1.0, self.train_steps / self.beta_anneal_steps)
+        self.beta = self.beta_start + (1.0 - self.beta_start) * progress
         return float(loss.item())
