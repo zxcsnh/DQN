@@ -320,38 +320,16 @@ class TrexEnv(gym.Env):
     metadata = {"render_modes": [None, "human"], "render_fps": FPS}
     action_meanings = {0: "noop", 1: "jump", 2: "duck"}
 
-    _screen = None
-    _clock = None
-    _display_ready = False
-    _display_caption = "T-Rex Rush"
-
-    @classmethod
-    def _ensure_display(cls):
-        _lazy_init_pygame()
-        if not cls._display_ready or pygame.display.get_surface() is None:
-            cls._screen = pygame.display.set_mode(scr_size)
-            pygame.display.set_caption(cls._display_caption)
-            cls._display_ready = True
-        else:
-            cls._screen = pygame.display.get_surface()
-        if cls._clock is None:
-            cls._clock = pygame.time.Clock()
-        return cls._screen
-
-    @classmethod
-    def _get_screen(cls):
-        return cls._ensure_display()
-
-    @classmethod
-    def _get_clock(cls):
-        if cls._clock is None:
-            cls._clock = pygame.time.Clock()
-        return cls._clock
-
     def __init__(self, render_mode=None, max_episode_steps=5000, max_steps=None):
         super().__init__()
         if render_mode not in self.metadata["render_modes"]:
             raise ValueError(f"Unsupported render_mode: {render_mode}")
+
+        # Instance-level display resources (fixes state leakage between instances)
+        self._screen = None
+        self._clock = None
+        self._display_ready = False
+        self._display_caption = "T-Rex Rush"
 
         self.render_mode = render_mode
         self.max_episode_steps = max_episode_steps if max_steps is None else max_steps
@@ -389,7 +367,7 @@ class TrexEnv(gym.Env):
         self.obstacles_cleared = 0
 
         if self.render_mode == "human":
-            TrexEnv._ensure_display()
+            self._ensure_display()
         self.replay_button_image, _ = load_image("replay_button.png", 35, 31, -1)
         self.gameover_image, _ = load_image("game_over.png", 190, 11, -1)
         number_images, number_rect = load_sprite_sheet("numbers.png", 12, 1, 11, int(11 * 6 / 5), -1)
@@ -402,6 +380,26 @@ class TrexEnv(gym.Env):
         self.hi_rect.top = int(height * 0.1)
         self.hi_rect.left = int(width * 0.73)
 
+    def _ensure_display(self):
+        _lazy_init_pygame()
+        if not self._display_ready or pygame.display.get_surface() is None:
+            self._screen = pygame.display.set_mode(scr_size)
+            pygame.display.set_caption(self._display_caption)
+            self._display_ready = True
+        else:
+            self._screen = pygame.display.get_surface()
+        if self._clock is None:
+            self._clock = pygame.time.Clock()
+        return self._screen
+
+    def _get_screen(self):
+        return self._ensure_display()
+
+    def _get_clock(self):
+        if self._clock is None:
+            self._clock = pygame.time.Clock()
+        return self._clock
+
     def _reset_round(self, start_speed):
         self.playerDino = Dino(44, 47)
         self.new_ground = Ground(-1 * start_speed)
@@ -412,6 +410,8 @@ class TrexEnv(gym.Env):
         self.clouds = pygame.sprite.Group()
         self.last_obstacle = pygame.sprite.Group()
 
+        # Set containers for sprites (pygame sprite group requirement)
+        # These are set per-instance to avoid interference between environments
         Cactus.containers = self.cacti
         Ptera.containers = self.pteras
         Cloud.containers = self.clouds
@@ -609,12 +609,12 @@ class TrexEnv(gym.Env):
 
         if self.render_mode == "human":
             self.render()
-            TrexEnv._get_clock().tick(FPS)
+            self._get_clock().tick(FPS)
 
         return observation, reward, self.terminated, self.truncated, info
 
     def render(self):
-        screen = TrexEnv._get_screen()
+        screen = self._get_screen()
         screen.fill(background_col)
         self.new_ground.draw(screen)
         self.clouds.draw(screen)
@@ -628,7 +628,7 @@ class TrexEnv(gym.Env):
         pygame.display.update()
 
     def render_game_over(self):
-        screen = TrexEnv._get_screen()
+        screen = self._get_screen()
         self.highsc.update(self.high_score)
         disp_gameOver_msg(screen, self.replay_button_image, self.gameover_image)
         if self.high_score != 0:
@@ -642,9 +642,9 @@ class TrexEnv(gym.Env):
     def close(self):
         if self.render_mode == "human" and pygame.display.get_surface() is not None:
             pygame.display.quit()
-            TrexEnv._screen = None
-            TrexEnv._clock = None
-            TrexEnv._display_ready = False
+            self._screen = None
+            self._clock = None
+            self._display_ready = False
 
 
 def register_trex_envs():
@@ -659,8 +659,35 @@ def register_trex_envs():
     )
 
 
+# Global display resources for human play mode (introscreen/play_human)
+_human_play_screen = None
+_human_play_clock = None
+_human_play_display_ready = False
+
+
+def _ensure_human_play_display():
+    global _human_play_screen, _human_play_clock, _human_play_display_ready
+    _lazy_init_pygame()
+    if not _human_play_display_ready or pygame.display.get_surface() is None:
+        _human_play_screen = pygame.display.set_mode(scr_size)
+        pygame.display.set_caption("T-Rex Rush")
+        _human_play_display_ready = True
+    else:
+        _human_play_screen = pygame.display.get_surface()
+    if _human_play_clock is None:
+        _human_play_clock = pygame.time.Clock()
+    return _human_play_screen
+
+
+def _get_human_play_clock():
+    global _human_play_clock
+    if _human_play_clock is None:
+        _human_play_clock = pygame.time.Clock()
+    return _human_play_clock
+
+
 def introscreen():
-    TrexEnv._ensure_display()
+    _ensure_human_play_display()
     temp_dino = Dino(44, 47)
     temp_dino.isBlinking = True
     gameStart = False
@@ -690,7 +717,7 @@ def introscreen():
 
         temp_dino.update()
 
-        screen = TrexEnv._get_screen()
+        screen = _ensure_human_play_display()
         screen.fill(background_col)
         screen.blit(temp_ground[0], temp_ground_rect)
         if temp_dino.isBlinking:
@@ -699,7 +726,7 @@ def introscreen():
         temp_dino.draw(screen)
         pygame.display.update()
 
-        TrexEnv._get_clock().tick(FPS)
+        _get_human_play_clock().tick(FPS)
         if not temp_dino.isJumping and not temp_dino.isBlinking:
             gameStart = True
 
@@ -746,7 +773,7 @@ def play_human():
                         if event.key in (pygame.K_RETURN, pygame.K_SPACE):
                             waiting_for_restart = False
                 env.render_game_over()
-                TrexEnv._get_clock().tick(FPS)
+                env._get_clock().tick(FPS)
             env.reset()
 
 

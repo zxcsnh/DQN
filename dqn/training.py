@@ -1,17 +1,64 @@
 ﻿from __future__ import annotations
 
 from collections import deque
+from pathlib import Path
 
 import numpy as np
 from tqdm import trange
 
-from config import LOGS_DIR, MODELS_DIR, ensure_result_dirs, get_env_config
+from config import RunDirs, create_run_dirs, ensure_result_dirs, get_env_config
 from .evaluation import evaluate_agent
 from .envs import make_env
 from .shared import compute_episode_metrics, make_agent, validate_names
 from .utils.logger import CSVLogger
 from .utils.seed_utils import seed_env, set_global_seed
 from .utils.state_processor import get_state_dim, process_state
+
+
+def _episode_extra_metrics(env_name: str, info: dict, episode_reward: float, step: int) -> dict:
+    values = {
+        "reward_per_step": float(episode_reward / step),
+        "max_position": "",
+        "score": "",
+        "high_score": "",
+        "speed": "",
+        "obstacles_cleared": "",
+    }
+    if env_name == "mountaincar":
+        values["max_position"] = info.get("max_position", "")
+    if env_name == "dino":
+        values.update(
+            {
+                "score": info.get("score", ""),
+                "high_score": info.get("high_score", ""),
+                "speed": info.get("speed", ""),
+                "obstacles_cleared": info.get("obstacles_cleared", ""),
+            }
+        )
+    return values
+
+
+def _prefixed_metrics(prefix: str, metrics: dict | None) -> dict:
+    if metrics is None:
+        return {}
+    return {f"{prefix}_{key}": value for key, value in metrics.items() if key != "episodes_detail"}
+
+
+def _run_model_test(agent, model_path: Path, env_name: str, algo_name: str, episodes: int, seed: int, model_kind: str) -> dict:
+    agent.load(model_path)
+    agent.epsilon = 0.0
+    metrics = evaluate_agent(
+        env_name=env_name,
+        algo_name=algo_name,
+        agent=agent,
+        episodes=episodes,
+        render=False,
+        seed=seed,
+    )
+    metrics["model_kind"] = model_kind
+    metrics["model_path"] = str(model_path)
+    metrics["test_seed_start"] = seed
+    return metrics
 
 
 def train(
@@ -21,6 +68,8 @@ def train(
     plot_after_train: bool = False,
     seed: int | None = None,
     log_name_suffix: str = "",
+    run_dir: str | Path | None = None,
+    run_final_test: bool = True,
 ) -> dict:
     validate_names(env_name, algo_name)
     ensure_result_dirs()
@@ -41,13 +90,30 @@ def train(
     agent = make_agent(env_name, algo_name, state_dim, action_dim)
 
     suffix = f"_{log_name_suffix}" if log_name_suffix else ""
-    log_path = LOGS_DIR / f"{env_name}_{algo_name}{suffix}_train_log.csv"
+
+    if run_dir is None:
+        run_dirs = create_run_dirs(env_name, algo_name, run_seed)
+    else:
+        resolved_run_dir = Path(run_dir)
+        logs_dir = resolved_run_dir / "logs"
+        models_dir = resolved_run_dir / "models"
+        figures_dir = resolved_run_dir / "figures"
+        for path in (resolved_run_dir, logs_dir, models_dir, figures_dir):
+            path.mkdir(parents=True, exist_ok=True)
+        run_dirs = RunDirs(
+            run_dir=resolved_run_dir,
+            logs_dir=logs_dir,
+            models_dir=models_dir,
+            figures_dir=figures_dir,
+        )
+
+    log_path = run_dirs.logs_dir / f"{env_name}_{algo_name}{suffix}_train_log.csv"
     logger = CSVLogger(log_path)
 
     best_train_reward = float("-inf")
     best_eval_reward = float("-inf")
     best_model_episode: int | None = None
-    best_model_path = MODELS_DIR / f"{env_name}_{algo_name}{suffix}_best.pth"
+    best_model_path = run_dirs.models_dir / f"{env_name}_{algo_name}{suffix}_best.pth"
     last_eval_metrics: dict | None = None
     recent_rewards = deque(maxlen=5)
     recent_steps = deque(maxlen=5)
@@ -107,22 +173,22 @@ def train(
                 agent.save(best_model_path)
                 is_best_model = 1
 
-        logger.log(
-            {
-                "episode": episode + 1,
-                "total_reward": episode_reward,
-                "steps": step,
-                "epsilon": agent.epsilon,
-                "loss": average_loss,
-                "success": success,
-                "custom_metric": custom_metric,
-                "eval_avg_reward": "" if eval_metrics is None else eval_metrics["avg_reward"],
-                "eval_avg_steps": "" if eval_metrics is None else eval_metrics["avg_steps"],
-                "eval_success_rate": "" if eval_metrics is None else eval_metrics["success_rate"],
-                "eval_avg_custom_metric": "" if eval_metrics is None else eval_metrics["avg_custom_metric"],
-                "is_best_model": is_best_model,
-            }
-        )
+        log_row = {
+            "episode": episode + 1,
+            "total_reward": episode_reward,
+            "steps": step,
+            "epsilon": agent.epsilon,
+            "loss": average_loss,
+            "success": success,
+            "custom_metric": custom_metric,
+            "eval_avg_reward": "" if eval_metrics is None else eval_metrics["avg_reward"],
+            "eval_avg_steps": "" if eval_metrics is None else eval_metrics["avg_steps"],
+            "eval_success_rate": "" if eval_metrics is None else eval_metrics["success_rate"],
+            "eval_avg_custom_metric": "" if eval_metrics is None else eval_metrics["avg_custom_metric"],
+            "is_best_model": is_best_model,
+        }
+        log_row.update(_episode_extra_metrics(env_name, info, episode_reward, step))
+        logger.log(log_row)
 
         recent_rewards.append(episode_reward)
         recent_steps.append(step)
@@ -158,19 +224,49 @@ def train(
             best_model_episode = env_config.episodes
             agent.save(best_model_path)
 
-    final_model_path = MODELS_DIR / f"{env_name}_{algo_name}{suffix}_final.pth"
+    final_model_path = run_dirs.models_dir / f"{env_name}_{algo_name}{suffix}_final.pth"
     agent.save(final_model_path)
+    if best_model_episode is None:
+        best_model_episode = env_config.episodes
+        best_eval_reward = best_train_reward
+        agent.save(best_model_path)
     env.close()
+
+    best_final_test_metrics = None
+    final_model_test_metrics = None
+    if run_final_test:
+        test_seed = run_seed + env_config.final_test_seed_offset
+        best_final_test_metrics = _run_model_test(
+            agent,
+            best_model_path,
+            env_name,
+            algo_name,
+            env_config.final_test_episodes,
+            test_seed,
+            "best",
+        )
+        final_model_test_metrics = _run_model_test(
+            agent,
+            final_model_path,
+            env_name,
+            algo_name,
+            env_config.final_test_episodes,
+            test_seed,
+            "final",
+        )
 
     if plot_after_train:
         from .utils.plot_utils import plot_single_run
 
-        plot_single_run(log_path, env_name, algo_name, env_config.moving_average_window)
+        plot_single_run(log_path, env_name, algo_name, env_config.moving_average_window, figures_dir=run_dirs.figures_dir)
 
-    return {
+    result = {
         "env_name": env_name,
         "algo_name": algo_name,
         "seed": run_seed,
+        "episodes": env_config.episodes,
+        "eval_episodes": env_config.eval_episodes,
+        "final_test_episodes": env_config.final_test_episodes,
         "best_train_reward": best_train_reward,
         "best_eval_reward": best_eval_reward,
         "best_model_episode": best_model_episode,
@@ -178,4 +274,11 @@ def train(
         "final_model_path": str(final_model_path),
         "last_eval_avg_reward": None if last_eval_metrics is None else last_eval_metrics["avg_reward"],
         "log_path": str(log_path),
+        "run_dir": str(run_dirs.run_dir),
+        "logs_dir": str(run_dirs.logs_dir),
+        "models_dir": str(run_dirs.models_dir),
+        "figures_dir": str(run_dirs.figures_dir),
     }
+    result.update(_prefixed_metrics("best_final_test", best_final_test_metrics))
+    result.update(_prefixed_metrics("final_model_test", final_model_test_metrics))
+    return result

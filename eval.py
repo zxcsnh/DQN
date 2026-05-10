@@ -1,13 +1,16 @@
-from DQN.evaluation import evaluate
+from DQN.evaluation import final_test
+
+
+MODEL_PATH_OVERRIDE = "results/0509-2254-experiment/models/dino_perdqn_seed47_best.pth"
 
 
 def main() -> None:
-    result = evaluate(
+    result = final_test(
         env_name="dino",
         algo_name="perdqn",
-        render=True,
-        # seed=42,
-        model_path_override="results\\models\\dino_perdqn_best.pth",
+        model_kind="best",
+        render=False,
+        model_path_override=MODEL_PATH_OVERRIDE,
     )
     print(result)
 
