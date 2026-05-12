@@ -20,7 +20,7 @@ def main() -> None:
     results = run_batch_experiments(
         env_names=["taxi", "mountaincar", "dino"],
         algo_names=["dqn", "perdqn"],
-        seeds=[47],
+        seeds=[42],
         render=False,
         plot_after_each_env=False,
         run_dir=run_dir,

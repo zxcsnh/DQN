@@ -21,6 +21,7 @@ class PERDQNAgent(DQNAgent):
             env_config.replay_buffer_size,
             alpha=per_config.alpha,
             priority_epsilon=per_config.priority_epsilon,
+            max_weight=per_config.max_weight,
         )
 
     def update(self):
@@ -57,7 +58,9 @@ class PERDQNAgent(DQNAgent):
         torch.nn.utils.clip_grad_norm_(self.q_network.parameters(), self.gradient_clip_norm)
         self.optimizer.step()
 
-        self.replay_buffer.update_priorities(indices, td_errors.detach().cpu().numpy())
+        # 裁剪TD误差用于优先级更新，防止极端优先级（范围[-10, 10]）
+        clipped_td_errors = torch.clamp(td_errors, -10.0, 10.0)
+        self.replay_buffer.update_priorities(indices, clipped_td_errors.detach().cpu().numpy())
 
         self.train_steps += 1
         if self.train_steps % self.target_update_freq == 0:

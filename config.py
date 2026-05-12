@@ -43,11 +43,12 @@ class Config:
 
 @dataclass(frozen=True, slots=True)
 class PerConfig:
-    alpha: float = 0.5
+    alpha: float = 0.7  # 提高alpha以更好区分关键事件（原值0.5）
     beta_start: float = 0.4
     beta_increment: float = 0.00005
-    beta_anneal_steps: int | None = 200000
-    priority_epsilon: float = 1e-5
+    beta_anneal_steps: int | None = None  # 自动对齐epsilon_decay_steps（原值200000）
+    priority_epsilon: float = 1e-3  # 防止样本饿死（原值1e-5）
+    max_weight: float = 4.0  # IS权重上限，防止梯度爆炸（文献推荐值）
 
 
 ENV_CONFIGS: Mapping[str, Config] = MappingProxyType(

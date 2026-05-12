@@ -35,10 +35,11 @@ class SumTree:
 
 
 class PrioritizedReplayBuffer:
-    def __init__(self, capacity: int, alpha: float = 0.6, priority_epsilon: float = 1e-5) -> None:
+    def __init__(self, capacity: int, alpha: float = 0.6, priority_epsilon: float = 1e-5, max_weight: float = 4.0) -> None:
         self.capacity = capacity
         self.alpha = alpha
         self.priority_epsilon = priority_epsilon
+        self.max_weight = max_weight  # IS权重上限，防止梯度爆炸
         self.buffer: list[tuple[np.ndarray, int, float, np.ndarray, float] | None] = [None] * capacity
         self.tree = SumTree(capacity)
         self._write_pos = 0
@@ -87,7 +88,7 @@ class PrioritizedReplayBuffer:
             prob = priority / total
             weights[i] = (self._size * prob) ** (-beta)
 
-        weights = weights / weights.max()
+        weights = weights / self.max_weight  # 使用固定max_weight归一化，防止权重爆炸
 
         samples = [self.buffer[idx] for idx in data_indices]
         states, actions, rewards, next_states, dones = zip(*samples)
