@@ -186,6 +186,11 @@ def train(
             "eval_success_rate": "" if eval_metrics is None else eval_metrics["success_rate"],
             "eval_avg_custom_metric": "" if eval_metrics is None else eval_metrics["avg_custom_metric"],
             "is_best_model": is_best_model,
+            "per_beta": getattr(agent, "last_beta", ""),
+            "per_mean_abs_td_error": getattr(agent, "last_mean_abs_td_error", ""),
+            "per_max_abs_td_error": getattr(agent, "last_max_abs_td_error", ""),
+            "per_mean_weight": getattr(agent, "last_mean_weight", ""),
+            "per_max_weight": getattr(agent, "last_max_weight", ""),
         }
         log_row.update(_episode_extra_metrics(env_name, info, episode_reward, step))
         logger.log(log_row)
