@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -103,25 +102,9 @@ def run_batch_experiments(
     plot_after_each_env: bool = False,
     run_dir: str | Path | None = None,
     run_final_test: bool = True,
-    max_workers: int = 1,
 ) -> list[dict]:
     tasks = [(env_name, algo_name, seed) for env_name in env_names for algo_name in algo_names for seed in seeds]
-    if max_workers <= 1:
-        return [
-            _run_one_experiment(task, render, plot_after_each_env, run_dir, run_final_test)
-            for task in tasks
-        ]
-
-    results_by_task: dict[tuple[str, str, int], dict] = {}
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(_run_one_experiment, task, render, plot_after_each_env, run_dir, run_final_test): task
-            for task in tasks
-        }
-        for future in as_completed(futures):
-            task = futures[future]
-            results_by_task[task] = future.result()
-    return [results_by_task[task] for task in tasks]
+    return [_run_one_experiment(task, render, plot_after_each_env, run_dir, run_final_test) for task in tasks]
 
 
 def _mean(rows: list[dict], column: str) -> float | str:
