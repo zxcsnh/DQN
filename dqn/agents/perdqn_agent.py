@@ -71,8 +71,7 @@ class PERDQNAgent(DQNAgent):
         self.replay_buffer.update_priorities(indices, td_errors.detach().cpu().numpy())
 
         self.train_steps += 1
-        if self.train_steps % self.target_update_freq == 0:
-            self.target_q_network.load_state_dict(self.q_network.state_dict())
+        self._update_target_network()
 
         self._update_epsilon()
         progress = min(1.0, self.train_steps / self.beta_anneal_steps)

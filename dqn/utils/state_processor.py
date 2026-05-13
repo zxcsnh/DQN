@@ -27,7 +27,7 @@ def get_state_dim(env_name: str, env=None) -> int:
         return 2
     if env_name == "dino":
         if env is None:
-            return 17
+            return 23
         return int(np.prod(env.observation_space.shape))
     raise ValueError(f"不支持的环境名称: {env_name}")
 

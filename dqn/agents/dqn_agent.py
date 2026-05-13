@@ -32,6 +32,8 @@ class DQNAgent:
         self.epsilon_end = env_config.epsilon_end
         self.epsilon_decay_steps = max(1, int(env_config.epsilon_decay_steps))
         self.target_update_freq = env_config.target_update_freq
+        self.soft_target_update = getattr(env_config, "soft_target_update", False)
+        self.target_update_tau = getattr(env_config, "target_update_tau", 0.005)
         self.gradient_clip_norm = env_config.gradient_clip_norm
         self.use_double_dqn = getattr(env_config, "use_double_dqn", False)
         self.warmup_steps = getattr(env_config, "warmup_steps", 0)
@@ -69,6 +71,15 @@ class DQNAgent:
         progress = min(1.0, self.train_steps / self.epsilon_decay_steps)
         self.epsilon = self.epsilon_start + (self.epsilon_end - self.epsilon_start) * progress
 
+    def _update_target_network(self) -> None:
+        if self.soft_target_update:
+            with torch.no_grad():
+                for target_param, param in zip(self.target_q_network.parameters(), self.q_network.parameters()):
+                    target_param.data.mul_(1.0 - self.target_update_tau)
+                    target_param.data.add_(self.target_update_tau * param.data)
+        elif self.train_steps % self.target_update_freq == 0:
+            self.target_q_network.load_state_dict(self.q_network.state_dict())
+
     def update(self):
         if self.env_steps < self.warmup_steps:
             return None
@@ -98,8 +109,7 @@ class DQNAgent:
         self.optimizer.step()
 
         self.train_steps += 1
-        if self.train_steps % self.target_update_freq == 0:
-            self.target_q_network.load_state_dict(self.q_network.state_dict())
+        self._update_target_network()
 
         self._update_epsilon()
         return float(loss.item())

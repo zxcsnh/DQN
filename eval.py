@@ -3,7 +3,7 @@ from pathlib import Path
 from DQN.evaluation import final_test
 
 
-MODEL_PATH = Path("C:/Users/HP/Desktop/fsdownload/0513-1158-experiment/models/dino_dqn_seed57_best.pth")
+MODEL_PATH = Path("results\\0513-1746-experiment\models\dino_dqn_seed57_best.pth")
 
 
 def parse_model_name(model_path: Path) -> tuple[str, str, int | None, str]:

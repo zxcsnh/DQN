@@ -4,7 +4,7 @@ from pathlib import Path
 from DQN.experiment_utils import generate_experiment_summary
 
 
-DEFAULT_RUN_DIR = Path("results/0512-1913-experiment")
+DEFAULT_RUN_DIR = Path("results\\0513-1746-experiment")
 
 
 def parse_args() -> argparse.Namespace:
