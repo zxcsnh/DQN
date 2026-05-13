@@ -22,7 +22,7 @@ class Config:
     eval_interval_episodes: int = 50
     eval_episodes: int = 10
     batch_size: int = 256
-    seed: int = 57
+    seed: int = 37
     gamma: float = 0.99
     learning_rate: float = 5e-4
     hidden_dim: int = 256
@@ -94,7 +94,7 @@ ENV_CONFIGS: Mapping[str, Config] = MappingProxyType(
         ),
         "dino": Config(
             env_id="TrexEnv-v0",
-            episodes=3000,
+            episodes=5000,
             max_steps_per_episode=8000,
             final_test_episodes=30,
             eval_interval_episodes=50,

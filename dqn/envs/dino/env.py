@@ -338,13 +338,13 @@ class TrexEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=np.array([
                 0.0, -20.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -float(height),
-                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -float(height),
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -float(height), -float(height),
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -float(height), -float(height),
             ], dtype=np.float32),
             high=np.array([
                 float(height), 20.0, 1.0, 1.0, 20.0, 1.0, float(width),
-                1.0, 1.0, float(width), float(width) / 4.0, 100.0, float(height), float(height),
-                1.0, 1.0, float(width), float(width) / 4.0, 100.0, float(height), float(height),
+                1.0, 1.0, float(width), float(width) / 4.0, 100.0, float(height), float(height), float(height),
+                1.0, 1.0, float(width), float(width) / 4.0, 100.0, float(height), float(height), float(height),
             ], dtype=np.float32),
             dtype=np.float32,
         )
