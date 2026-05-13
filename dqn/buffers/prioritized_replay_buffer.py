@@ -5,6 +5,8 @@ import numpy as np
 
 class SumTree:
     def __init__(self, capacity: int) -> None:
+        if capacity < 1:
+            raise ValueError("capacity must be positive")
         self.capacity = capacity
         self.tree = np.zeros(2 * capacity - 1, dtype=np.float64)
         self._leaf_offset = capacity - 1
@@ -13,6 +15,11 @@ class SumTree:
         return float(self.tree[0])
 
     def update(self, data_idx: int, priority: float) -> None:
+        if not 0 <= data_idx < self.capacity:
+            raise IndexError(f"data_idx out of range: {data_idx}")
+        if not np.isfinite(priority) or priority < 0.0:
+            raise ValueError("priority must be finite and non-negative")
+
         leaf = self._leaf_offset + data_idx
         delta = priority - self.tree[leaf]
         self.tree[leaf] = priority
@@ -21,6 +28,11 @@ class SumTree:
             self.tree[leaf] += delta
 
     def sample(self, value: float) -> tuple[int, float]:
+        total = self.total()
+        if total <= 0.0:
+            raise ValueError("cannot sample from an empty SumTree")
+        value = min(max(float(value), 0.0), np.nextafter(total, 0.0))
+
         idx = 0
         while idx < self._leaf_offset:
             left = 2 * idx + 1
@@ -41,6 +53,7 @@ class PrioritizedReplayBuffer:
         self.priority_epsilon = priority_epsilon
         self.buffer: list[tuple[np.ndarray, int, float, np.ndarray, float] | None] = [None] * capacity
         self.tree = SumTree(capacity)
+        self.max_priority = 1.0
         self._write_pos = 0
         self._size = 0
 
@@ -49,8 +62,7 @@ class PrioritizedReplayBuffer:
         next_state_array = np.asarray(next_state, dtype=np.float32)
         self.buffer[self._write_pos] = (state_array, int(action), float(reward), next_state_array, float(done))
 
-        max_priority = max(self.tree.tree[self.tree._leaf_offset : self.tree._leaf_offset + self._size].max(), 1.0) if self._size > 0 else 1.0
-        self.tree.update(self._write_pos, float(max_priority))
+        self.tree.update(self._write_pos, self.max_priority)
         self._write_pos = (self._write_pos + 1) % self.capacity
         self._size = min(self._size + 1, self.capacity)
 
@@ -108,6 +120,7 @@ class PrioritizedReplayBuffer:
         for idx, td_error in zip(indices, td_errors):
             priority = float((abs(td_error) + self.priority_epsilon) ** self.alpha)
             self.tree.update(int(idx), priority)
+            self.max_priority = max(self.max_priority, priority)
 
     def __len__(self) -> int:
         return self._size

@@ -333,18 +333,18 @@ class TrexEnv(gym.Env):
 
         self.render_mode = render_mode
         self.max_episode_steps = max_episode_steps if max_steps is None else max_steps
-        self.observation_size = 15
+        self.observation_size = 17
         self.action_space = spaces.Discrete(3)
         self.observation_space = spaces.Box(
             low=np.array([
                 0.0, -20.0, 0.0, 0.0, 0.0,
-                0.0, 0.0, 0.0, 0.0, 0.0,
-                0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
             ], dtype=np.float32),
             high=np.array([
-                float(height), 20.0, 1.0, 1.0, 100.0,
-                1.0, float(width), float(width), float(height), float(height),
-                1.0, float(width), float(width), float(height), float(height),
+                float(height), 20.0, 1.0, 1.0, 20.0,
+                1.0, 1.0, float(width), 100.0, float(height), float(height),
+                1.0, 1.0, float(width), 100.0, float(height), float(height),
             ], dtype=np.float32),
             dtype=np.float32,
         )
@@ -522,14 +522,15 @@ class TrexEnv(gym.Env):
 
     def _obstacle_features(self, obstacle):
         if obstacle is None:
-            return [0.0, float(width), 0.0, 0.0, 0.0]
+            return [0.0, 0.0, float(width), 0.0, 0.0, 0.0]
 
+        obstacle_present = 1.0
         obstacle_type = 1.0 if isinstance(obstacle, Ptera) else 0.0
         distance = float(max(0, obstacle.rect.left - self.playerDino.rect.right))
         obstacle_width = float(obstacle.rect.width)
         obstacle_height = float(obstacle.rect.height)
         obstacle_center_y = float(obstacle.rect.centery)
-        return [obstacle_type, distance, obstacle_width, obstacle_height, obstacle_center_y]
+        return [obstacle_present, obstacle_type, distance, obstacle_width, obstacle_height, obstacle_center_y]
 
     def _build_observation(self):
         nearest = self._nearest_obstacles(2)

@@ -23,7 +23,7 @@ class Config:
     eval_interval_episodes: int = 50
     eval_episodes: int = 10
     batch_size: int = 256
-    seed: int = 41
+    seed: int = 57
     gamma: float = 0.99
     learning_rate: float = 5e-4
     hidden_dim: int = 256
@@ -43,9 +43,8 @@ class Config:
 
 @dataclass(frozen=True, slots=True)
 class PerConfig:
-    alpha: float = 0.6
+    alpha: float = 0.5
     beta_start: float = 0.4
-    beta_increment: float = 0.00005
     beta_anneal_steps: int | None = None
     priority_epsilon: float = 1e-5
 
@@ -102,7 +101,7 @@ ENV_CONFIGS: Mapping[str, Config] = MappingProxyType(
             max_steps_per_episode=8000,
             final_test_episodes=30,
             eval_interval_episodes=50,
-            eval_episodes=8,
+            eval_episodes=15,
             batch_size=128,
             gamma=0.995,
             learning_rate=1e-5,

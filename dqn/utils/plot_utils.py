@@ -139,35 +139,6 @@ def plot_metric_comparison(
     _save_figure(output_name, figures_dir=figures_dir)
 
 
-def plot_summary_bars(summary_path: Path, figures_dir: Path | None = None) -> None:
-    if not summary_path.exists():
-        return
-    with summary_path.open("r", encoding="utf-8") as csv_file:
-        rows = [row for row in csv.DictReader(csv_file) if row.get("final_test_avg_reward", "")]
-    if not rows:
-        return
-
-    metrics = ["final_test_avg_reward", "final_test_success_rate", "final_test_avg_steps", "final_test_avg_custom_metric"]
-    for metric in metrics:
-        labels = []
-        values = []
-        for row in rows:
-            value = row.get(metric, "")
-            if value == "":
-                continue
-            labels.append(f"{row.get('env_name', '')}-{row.get('algo_name', '')}")
-            values.append(float(value))
-        if not values:
-            continue
-        plt.figure(figsize=(max(8, len(values) * 1.2), 5))
-        plt.bar(labels, values)
-        plt.xticks(rotation=35, ha="right")
-        plt.ylabel(metric)
-        plt.title(metric)
-        plt.tight_layout()
-        _save_figure(f"summary_{metric}.png", figures_dir=figures_dir)
-
-
 def plot_env_comparisons(
     env_name: str,
     dqn_log: Path,

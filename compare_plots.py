@@ -1,9 +1,9 @@
 from pathlib import Path
 
-from DQN.utils.plot_utils import plot_env_comparisons, plot_summary_bars
+from DQN.utils.plot_utils import plot_env_comparisons
 
 
-COMPARE_RUN_DIR = Path("results\\0510-1454-experiment")
+COMPARE_RUN_DIR = Path("results\\0512-1913-experiment")
 env_names = ["taxi", "mountaincar", "dino"]
 window = 50
 
@@ -69,8 +69,6 @@ def main() -> None:
 
         plot_env_comparisons(env_name, dqn_log, perdqn_log, window, figures_dir=figures_dir)
         print(f"已生成 {env_name} 的对比图。")
-
-    plot_summary_bars(logs_dir / "experiment_summary.csv", figures_dir=figures_dir)
 
 
 if __name__ == "__main__":

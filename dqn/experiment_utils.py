@@ -5,8 +5,8 @@ from pathlib import Path
 
 import numpy as np
 
-from config import LOGS_DIR
-from .evaluation import evaluate_random_policy
+from config import LOGS_DIR, get_env_config
+from .evaluation import final_test, evaluate_random_policy
 from .training import train
 
 
@@ -70,6 +70,11 @@ SUMMARY_FIELDNAMES = [
     "log_window_avg_steps",
     "log_window_success_rate",
     "log_window_avg_custom_metric",
+    "log_window_avg_per_beta",
+    "log_window_avg_per_mean_abs_td_error",
+    "log_window_avg_per_max_abs_td_error",
+    "log_window_avg_per_mean_weight",
+    "log_window_avg_per_max_weight",
     "best_model_path",
     "final_model_path",
     "log_path",
@@ -97,13 +102,20 @@ def _run_one_experiment(task: tuple[str, str, int], render: bool, plot_after_eac
 def run_batch_experiments(
     env_names: list[str],
     algo_names: list[str],
-    seeds: list[int],
+    seeds: list[int] | None = None,
     render: bool = False,
     plot_after_each_env: bool = False,
     run_dir: str | Path | None = None,
     run_final_test: bool = True,
 ) -> list[dict]:
-    tasks = [(env_name, algo_name, seed) for env_name in env_names for algo_name in algo_names for seed in seeds]
+    if seeds is None:
+        tasks = [
+            (env_name, algo_name, get_env_config(env_name).seed)
+            for env_name in env_names
+            for algo_name in algo_names
+        ]
+    else:
+        tasks = [(env_name, algo_name, seed) for env_name in env_names for algo_name in algo_names for seed in seeds]
     return [_run_one_experiment(task, render, plot_after_each_env, run_dir, run_final_test) for task in tasks]
 
 
@@ -140,6 +152,11 @@ def summarize_training_log(log_path: Path, window: int | None = None) -> dict:
         "log_window_avg_steps": _mean(tail_rows, "steps"),
         "log_window_success_rate": _mean(tail_rows, "success"),
         "log_window_avg_custom_metric": _mean(tail_rows, "custom_metric"),
+        "log_window_avg_per_beta": _mean(tail_rows, "per_beta"),
+        "log_window_avg_per_mean_abs_td_error": _mean(tail_rows, "per_mean_abs_td_error"),
+        "log_window_avg_per_max_abs_td_error": _mean(tail_rows, "per_max_abs_td_error"),
+        "log_window_avg_per_mean_weight": _mean(tail_rows, "per_mean_weight"),
+        "log_window_avg_per_max_weight": _mean(tail_rows, "per_max_weight"),
         "best_train_reward": max(float(row["total_reward"]) for row in rows),
     }
     if eval_rows:
@@ -170,6 +187,7 @@ def generate_experiment_summary(
     logs_dir: str | Path = LOGS_DIR,
     output_path: str | Path | None = None,
     include_random_baseline: bool = False,
+    evaluate_models: bool = False,
 ) -> Path:
     resolved_logs_dir = Path(logs_dir)
     rows = []
@@ -189,8 +207,30 @@ def generate_experiment_summary(
             }
         )
         seed_suffix = f"_seed{seed}" if seed != "" else ""
-        row["best_model_path"] = str(run_dir / "models" / f"{env_name}_{algo_name}{seed_suffix}_best.pth")
-        row["final_model_path"] = str(run_dir / "models" / f"{env_name}_{algo_name}{seed_suffix}_final.pth")
+        best_model_path = run_dir / "models" / f"{env_name}_{algo_name}{seed_suffix}_best.pth"
+        final_model_path = run_dir / "models" / f"{env_name}_{algo_name}{seed_suffix}_final.pth"
+        row["best_model_path"] = str(best_model_path)
+        row["final_model_path"] = str(final_model_path)
+        if evaluate_models:
+            run_seed = None if seed == "" else int(seed)
+            if best_model_path.exists():
+                best_metrics = final_test(
+                    env_name,
+                    algo_name,
+                    model_kind="best",
+                    seed=run_seed,
+                    model_path_override=best_model_path,
+                )
+                row.update({f"best_final_test_{key}": value for key, value in best_metrics.items() if key != "episodes_detail"})
+            if final_model_path.exists():
+                final_metrics = final_test(
+                    env_name,
+                    algo_name,
+                    model_kind="final",
+                    seed=run_seed,
+                    model_path_override=final_model_path,
+                )
+                row.update({f"final_model_test_{key}": value for key, value in final_metrics.items() if key != "episodes_detail"})
         rows.append(row)
 
     if include_random_baseline:
