@@ -17,7 +17,6 @@ class Config:
     env_id: str = "Taxi-v4"
     episodes: int = 3000
     max_steps_per_episode: int = 5000
-    test_episodes: int = 20
     final_test_episodes: int = 30
     final_test_seed_offset: int = 20_000
     eval_interval_episodes: int = 50
@@ -43,17 +42,17 @@ class Config:
 
 @dataclass(frozen=True, slots=True)
 class PerConfig:
-    alpha: float = 0.5
+    alpha: float = 0.45
     beta_start: float = 0.4
-    beta_anneal_steps: int | None = None
-    priority_epsilon: float = 1e-5
+    beta_anneal_steps: int | None = 180000
+    priority_epsilon: float = 1e-4
 
 
 ENV_CONFIGS: Mapping[str, Config] = MappingProxyType(
     {
         "taxi": Config(
             env_id="Taxi-v4",
-            episodes=3000,
+            episodes=2000,
             max_steps_per_episode=200,
             final_test_episodes=50,
             eval_interval_episodes=50,
@@ -70,12 +69,10 @@ ENV_CONFIGS: Mapping[str, Config] = MappingProxyType(
             target_update_freq=500,
             success_threshold=1,
             render_fps=8,
-            moving_average_window=50,
-            gradient_clip_norm=10.0,
         ),
         "mountaincar": Config(
             env_id="MountainCar-v0",
-            episodes=3000,
+            episodes=2000,
             max_steps_per_episode=500,
             final_test_episodes=30,
             eval_interval_episodes=50,
@@ -92,12 +89,10 @@ ENV_CONFIGS: Mapping[str, Config] = MappingProxyType(
             target_update_freq=1000,
             success_threshold=1,
             render_fps=30,
-            moving_average_window=100,
-            gradient_clip_norm=10.0,
         ),
         "dino": Config(
             env_id="TrexEnv-v0",
-            episodes=5000,
+            episodes=3000,
             max_steps_per_episode=8000,
             final_test_episodes=30,
             eval_interval_episodes=50,

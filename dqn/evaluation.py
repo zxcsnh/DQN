@@ -172,48 +172,6 @@ def evaluate_agent(
     return result
 
 
-def evaluate(
-    env_name: str,
-    algo_name: str,
-    render: bool = False,
-    use_best_model: bool = True,
-    seed: int | None = None,
-    model_suffix_override: str = "",
-    model_path_override: str | Path | None = None,
-) -> dict:
-    _validate_names(env_name, algo_name)
-    env_config = get_env_config(env_name)
-    run_seed = env_config.seed if seed is None else seed
-    set_global_seed(run_seed)
-
-    env = make_env(env_name, render=render)
-    seed_env(env, run_seed)
-
-    state_dim = get_state_dim(env_name, env)
-    action_dim = int(env.action_space.n)
-    agent = _make_agent(env_name, algo_name, state_dim, action_dim)
-    env.close()
-
-    model_kind = "best" if use_best_model else "final"
-    model_path = _resolve_model_path(env_name, algo_name, model_kind, model_suffix_override, model_path_override)
-    if not model_path.exists():
-        raise FileNotFoundError(f"未找到模型文件: {model_path}")
-
-    agent.load(model_path)
-    agent.epsilon = 0.0
-
-    metrics = evaluate_agent(
-        env_name=env_name,
-        algo_name=algo_name,
-        agent=agent,
-        episodes=env_config.test_episodes,
-        render=render,
-        seed=run_seed,
-    )
-    metrics["model_path"] = str(model_path)
-    metrics["model_kind"] = model_kind
-    return metrics
-
 
 def final_test(
     env_name: str,
@@ -293,4 +251,4 @@ def evaluate_random_policy(
     return metrics
 
 
-__all__ = ["evaluate", "evaluate_agent", "final_test", "evaluate_random_policy", "RandomPolicy"]
+__all__ = ["evaluate_agent", "final_test", "evaluate_random_policy", "RandomPolicy"]

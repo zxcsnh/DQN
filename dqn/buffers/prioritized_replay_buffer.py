@@ -47,10 +47,17 @@ class SumTree:
 
 
 class PrioritizedReplayBuffer:
-    def __init__(self, capacity: int, alpha: float = 0.6, priority_epsilon: float = 1e-5) -> None:
+    def __init__(
+        self,
+        capacity: int,
+        alpha: float = 0.6,
+        priority_epsilon: float = 1e-5,
+        max_priority_decay: float = 0.9995,
+    ) -> None:
         self.capacity = capacity
         self.alpha = alpha
         self.priority_epsilon = priority_epsilon
+        self.max_priority_decay = max_priority_decay
         self.buffer: list[tuple[np.ndarray, int, float, np.ndarray, float] | None] = [None] * capacity
         self.tree = SumTree(capacity)
         self.max_priority = 1.0
@@ -117,10 +124,12 @@ class PrioritizedReplayBuffer:
         )
 
     def update_priorities(self, indices: np.ndarray, td_errors: np.ndarray) -> None:
+        batch_max_priority = 0.0
         for idx, td_error in zip(indices, td_errors):
             priority = float((abs(td_error) + self.priority_epsilon) ** self.alpha)
             self.tree.update(int(idx), priority)
-            self.max_priority = max(self.max_priority, priority)
+            batch_max_priority = max(batch_max_priority, priority)
+        self.max_priority = max(self.max_priority * self.max_priority_decay, batch_max_priority, self.priority_epsilon ** self.alpha)
 
     def __len__(self) -> int:
         return self._size

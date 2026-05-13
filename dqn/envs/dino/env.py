@@ -333,16 +333,16 @@ class TrexEnv(gym.Env):
 
         self.render_mode = render_mode
         self.max_episode_steps = max_episode_steps if max_steps is None else max_steps
-        self.observation_size = 17
+        self.observation_size = 20
         self.action_space = spaces.Discrete(3)
         self.observation_space = spaces.Box(
             low=np.array([
-                0.0, -20.0, 0.0, 0.0, 0.0,
+                0.0, -20.0, 0.0, 0.0, 0.0, 0.0, -float(height), 0.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
             ], dtype=np.float32),
             high=np.array([
-                float(height), 20.0, 1.0, 1.0, 20.0,
+                float(height), 20.0, 1.0, 1.0, 20.0, 1.0, float(height), float(width),
                 1.0, 1.0, float(width), 100.0, float(height), float(height),
                 1.0, 1.0, float(width), 100.0, float(height), float(height),
             ], dtype=np.float32),
@@ -537,12 +537,23 @@ class TrexEnv(gym.Env):
         first = nearest[0] if len(nearest) > 0 else None
         second = nearest[1] if len(nearest) > 1 else None
 
+        can_jump = float(self.playerDino.rect.bottom == GROUND_Y)
+        ptera_relative_y = 0.0
+        if first is not None and isinstance(first, Ptera):
+            ptera_relative_y = float(first.rect.centery - self.playerDino.rect.centery)
+        obstacle_spacing = float(width)
+        if first is not None and second is not None:
+            obstacle_spacing = float(max(0, second.rect.left - first.rect.left))
+
         obs = [
             float(GROUND_Y - self.playerDino.rect.bottom),
             float(self.playerDino.movement[1]),
             float(int(self.playerDino.isJumping)),
             float(int(self.playerDino.isDucking)),
             float(self.gamespeed),
+            can_jump,
+            ptera_relative_y,
+            obstacle_spacing,
         ]
         obs.extend(self._obstacle_features(first))
         obs.extend(self._obstacle_features(second))
@@ -567,10 +578,10 @@ class TrexEnv(gym.Env):
     def _compute_reward(self, newly_cleared, redundant_jump: bool = False):
         reward = 0.1
         if newly_cleared > 0:
-            reward += 2.0 * newly_cleared
+            reward += 1.2 * newly_cleared
             self.obstacles_cleared += newly_cleared
         if self.playerDino.isDead:
-            reward -= 10.0
+            reward -= 6.0
         if redundant_jump:
             reward -= 0.02
         self.last_score = self.playerDino.score

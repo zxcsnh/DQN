@@ -9,9 +9,11 @@ class QNetwork(nn.Module):
         super().__init__()
         self.model = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
-            nn.ReLU(),
+            nn.LayerNorm(hidden_dim),
+            nn.SiLU(),
             nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
+            nn.LayerNorm(hidden_dim),
+            nn.SiLU(),
             nn.Linear(hidden_dim, action_dim),
         )
 
