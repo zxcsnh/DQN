@@ -7,7 +7,7 @@ from config import get_env_config
 from DQN.utils.plot_utils import plot_single_run
 
 
-DEFAULT_LOG_PATH = Path("results/0509-2254-experiment/logs/dino_perdqn_seed47_train_log.csv")
+DEFAULT_LOG_PATH = Path("results\\0514-1035-dino-dqn-seed37\logs\dino_dqn_train_log.csv")
 
 
 def _infer_env_algo(log_path: Path) -> tuple[str, str]:

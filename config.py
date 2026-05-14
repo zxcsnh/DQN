@@ -44,7 +44,7 @@ class Config:
 
 @dataclass(frozen=True, slots=True)
 class PerConfig:
-    alpha: float = 0.45
+    alpha: float = 0.5
     beta_start: float = 0.4
     beta_anneal_steps: int | None = 180000
     priority_epsilon: float = 1e-4
@@ -94,7 +94,7 @@ ENV_CONFIGS: Mapping[str, Config] = MappingProxyType(
         ),
         "dino": Config(
             env_id="TrexEnv-v0",
-            episodes=5000,
+            episodes=3000,
             max_steps_per_episode=8000,
             final_test_episodes=30,
             eval_interval_episodes=50,
@@ -105,18 +105,18 @@ ENV_CONFIGS: Mapping[str, Config] = MappingProxyType(
             hidden_dim=256,
             epsilon_start=1.0,
             epsilon_end=0.05,
-            epsilon_decay_steps=300000,
+            epsilon_decay_steps=500000,
             replay_buffer_size=200000,
             min_replay_size=5000,
             target_update_freq=2000,
             soft_target_update=True,
-            target_update_tau=0.005,
+            target_update_tau=0.001,
             success_threshold=20,
             render_fps=30,
             moving_average_window=30,
             gradient_clip_norm=5.0,
             warmup_steps=10000,
-            use_double_dqn=True
+            use_double_dqn=False
         ),
     }
 )

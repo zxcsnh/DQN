@@ -583,14 +583,19 @@ class TrexEnv(gym.Env):
         }
 
     def _compute_reward(self, newly_cleared, redundant_jump: bool = False):
-        reward = 0.02
+        survival_reward = 0.01
+        obstacle_reward = 0.0
+        collision_penalty = -1.0
+        redundant_jump_penalty = 0.0
+
+        reward = survival_reward
         if newly_cleared > 0:
-            reward += 3.0 * newly_cleared
+            reward += obstacle_reward * newly_cleared
             self.obstacles_cleared += newly_cleared
         if self.playerDino.isDead:
-            reward -= 10.0
+            reward += collision_penalty
         if redundant_jump:
-            reward -= 0.02
+            reward += redundant_jump_penalty
         self.last_score = self.playerDino.score
         return reward
 

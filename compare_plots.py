@@ -3,8 +3,8 @@ from pathlib import Path
 from DQN.utils.plot_utils import plot_env_comparisons
 
 
-COMPARE_RUN_DIR = Path("results\\0513-1746-experiment")
-env_names = ["dino"]
+COMPARE_RUN_DIR = Path("results\\0513-2330-experiment")
+env_names = ["dino", "taxi", "mountaincar"]
 window = 50
 
 
