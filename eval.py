@@ -3,7 +3,7 @@ from pathlib import Path
 from DQN.evaluation import final_test
 
 
-MODEL_PATH = Path("results\\0513-1746-experiment\models\dino_dqn_seed57_best.pth")
+MODEL_PATH = Path("results\\0514-2319-experiment\models\\mountaincar_perdqn_seed42_best.pth")
 
 
 def parse_model_name(model_path: Path) -> tuple[str, str, int | None, str]:
@@ -30,7 +30,7 @@ def main() -> None:
         algo_name=algo_name,
         model_kind=model_kind,
         seed=seed,
-        render=False,
+        render=True,
         model_path_override=MODEL_PATH,
     )
     print(result)

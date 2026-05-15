@@ -1,247 +1,339 @@
-# PER-DQN 策略决策实验
+# DQN / PER-DQN Strategy Decision Experiments
 
-本项目用于本科毕业设计中的「基于 PER-DQN 的策略决策」实验。实现了 DQN 与 Prioritized Experience Replay DQN（PER-DQN），支持 Double DQN 可选扩展，并在 Taxi-v3、MountainCar-v0 与自定义 Dino/T-Rex 三类离散动作决策环境中进行对比。
+本项目用于比较 DQN 与 Prioritized Experience Replay DQN（PER-DQN）在离散动作决策任务中的表现。当前代码支持三个环境：
+
+- `dino`：自定义 Chrome Dino / T-Rex Gymnasium 环境
+- `taxi`：Gymnasium Taxi 环境
+- `mountaincar`：Gymnasium MountainCar 环境
+
+说明：本文档以当前代码为准。若历史实验结果或旧文档与源码不一致，请优先参考 `config.py`、`DQN/training.py` 和具体环境实现。
 
 ## 项目结构
 
-```
-├── config.py                    # 全局配置（超参数、环境配置、路径常量）
-├── train.py                     # 单次训练入口
-├── eval.py                      # 模型评估入口
-├── experiment.py                # 批量实验入口（多环境 × 多算法 × 多种子）
-├── compare_plots.py             # DQN vs PER-DQN 对比曲线生成
-│
-├── DQN/
-│   ├── q_network.py             # Q 网络（3 层 MLP）
-│   ├── training.py              # 训练主循环
-│   ├── evaluation.py            # 模型评估逻辑
-│   ├── experiment_utils.py      # 批量实验与结果汇总
-│   ├── shared.py                # 名称校验、Agent 工厂、指标计算
-│   │
-│   ├── agents/
-│   │   ├── dqn_agent.py         # DQN Agent（支持 Double DQN 与 warmup）
-│   │   └── perdqn_agent.py      # PER-DQN Agent（继承 DQN，覆盖优先回放逻辑）
-│   │
-│   ├── buffers/
-│   │   ├── replay_buffer.py     # 均匀采样经验回放池（deque）
-│   │   └── prioritized_replay_buffer.py  # SumTree 优先经验回放池 + IS 权重
-│   │
-│   ├── envs/
-│   │   ├── env_factory.py       # 环境工厂（Taxi / MountainCar / Dino）
-│   │   ├── dino_env.py          # 简化版 Dino 环境（无 Pygame，用于快速验证）
-│   │   └── dino/
-│   │       ├── env.py           # 完整 TrexEnv（Pygame 渲染、精灵动画、音效）
-│   │       └── main.py          # 人类可玩入口
-│   │
-│   └── utils/
-│       ├── logger.py            # CSV 日志记录器
-│       ├── plot_utils.py        # 单次训练曲线 + DQN vs PER-DQN 对比图
-│       ├── seed_utils.py        # 全局随机种子与环境种子
-│       └── state_processor.py   # 状态预处理（One-hot、归一化）
-│
-└── results/
-    ├── models/                  # 模型检查点（best.pth / final.pth）
-    ├── logs/                    # 训练日志 CSV
-    └── figures/                 # 对比图输出
+```text
+.
+|-- config.py                         # 全局配置、环境超参数、结果目录
+|-- train.py                          # 单次训练入口
+|-- eval.py                           # 单个模型评估入口
+|-- experiment.py                     # 批量实验入口
+|-- summary.py                        # 从日志生成实验汇总
+|-- compare_plots.py                  # DQN / PER-DQN 对比图生成
+|-- plot_log.py                       # 单次训练日志绘图
+|-- DQN/
+|   |-- training.py                   # 训练主循环
+|   |-- evaluation.py                 # 评估与最终测试
+|   |-- shared.py                     # 名称校验、Agent 工厂、任务指标
+|   |-- q_network.py                  # Q 网络
+|   |-- experiment_utils.py           # 批量实验与汇总工具
+|   |-- agents/
+|   |   |-- dqn_agent.py              # DQN Agent
+|   |   `-- perdqn_agent.py           # PER-DQN Agent
+|   |-- buffers/
+|   |   |-- replay_buffer.py          # 均匀经验回放
+|   |   `-- prioritized_replay_buffer.py
+|   |-- envs/
+|   |   |-- env_factory.py            # 环境工厂
+|   |   `-- dino/
+|   |       |-- env.py                # 自定义 TrexEnv-v0
+|   |       |-- main.py               # 人类游玩入口
+|   |       `-- sprites/              # Dino 资源文件
+|   `-- utils/
+|       |-- state_processor.py        # 状态预处理
+|       |-- seed_utils.py             # 随机种子
+|       |-- logger.py                 # CSV 日志
+|       `-- plot_utils.py             # 绘图工具
+`-- results/                          # 训练输出、模型、日志、图表
 ```
 
-## 算法设计
+## 安装依赖
 
-### DQN（Deep Q-Network）
-
-使用 MLP 近似动作价值函数 Q(s, a)，通过目标网络（target network）缓解训练不稳定性。核心要素：
-
-- **Q 网络**：3 层全连接网络（`Linear → ReLU → Linear → ReLU → Linear`）
-- **目标网络**：与 Q 网络结构相同，定期硬同步（`target_update_freq`）
-- **探索策略**：ε-greedy，线性衰减（`epsilon_start → epsilon_end`）
-- **损失函数**：SmoothL1Loss（Huber loss）
-- **梯度裁剪**：`clip_grad_norm_` 防止梯度爆炸
-- **随机探索热身**：训练前 `warmup_steps` 步使用纯随机策略填充经验池
-
-### Double DQN（可配置选项）
-
-在 `config.py` 中通过 `use_double_dqn` 开关控制。启用后，目标 Q 值的计算由：
-
-```
-target = r + γ · max_a' Q_target(s', a')
-```
-
-改为：
-
-```
-a* = argmax_a' Q_online(s', a')
-target = r + γ · Q_target(s', a*)
-```
-
-Online 网络负责选择动作，目标网络负责评估，有效缓解 Q 值过估计问题。Dino 环境默认启用。
-
-### PER-DQN（Prioritized Experience Replay DQN）
-
-在 DQN 基础上引入优先经验回放，核心改进：
-
-1. **SumTree 优先级采样**（O(log n)）：根据 TD error 为每条经验分配优先级，使高误差、高信息量的经验被更频繁重放。
-2. **优先级计算**（标准 PER 公式）：`priority = (|TD_error| + ε_priority)^α`
-   - α 控制优先级程度（α=0 退化为均匀采样，α=1 为完全按 TD error 优先级）
-3. **重要性采样权重**（IS weights）：`w_i = (N · P(i))^(-β) / max_j(w_j)`
-   - β 从 `beta_start` 线性递增至 1.0，修正非均匀采样引入的分布偏差
-   - 采用 `1 / max(w)` 归一化，确保权重仅向下缩放更新（标准 PER 方法）
-4. **新经验优先**：新存入的经验被赋予当前最大优先级，保证每条经验至少被采样一次
-
-## Dino 策略决策环境
-
-自定义 Dino 环境已注册为 Gymnasium 环境 `TrexEnv-v0`，通过 `gym.make("TrexEnv-v0")` 创建，与标准 Gymnasium API 完全兼容。
-
-### 动作空间
-
-| Action | 名称 | 策略角色 |
-| --- | --- | --- |
-| `0` | noop | 保持当前状态，用于等待时机或保持不动 |
-| `1` | jump | 跳跃越过地面障碍（cactus） |
-| `2` | duck | 下蹲躲避空中障碍（ptera） |
-
-### 观测空间
-
-15 维连续向量，包含角色运动状态与最近两个障碍物信息：
-
-| 索引 | 特征 | 含义 |
-| --- | --- | --- |
-| `0` | dino height | 恐龙底部距地面高度 |
-| `1` | vertical velocity | 垂直速度（正值下落，负值上升） |
-| `2` | is jumping | 是否处于跳跃状态 |
-| `3` | is ducking | 是否处于下蹲状态 |
-| `4` | game speed | 当前游戏速度（初始 4，每 700 帧 +1） |
-| `5` | obstacle 1 type | 最近障碍物类型（0=地面 cactus，1=空中 ptera） |
-| `6` | obstacle 1 distance | 最近障碍物与恐龙右侧的水平距离 |
-| `7` | obstacle 1 width | 最近障碍物宽度 |
-| `8` | obstacle 1 height | 最近障碍物高度 |
-| `9` | obstacle 1 center y | 最近障碍物中心纵坐标 |
-| `10` | obstacle 2 type | 第二近障碍物类型 |
-| `11` | obstacle 2 distance | 第二近障碍物距离 |
-| `12` | obstacle 2 width | 第二近障碍物宽度 |
-| `13` | obstacle 2 height | 第二近障碍物高度 |
-| `14` | obstacle 2 center y | 第二近障碍物中心纵坐标 |
-
-所有观测值经 min-max 归一化至 [0, 1] 后输入网络。
-
-### 奖励设计
-
-| 事件 | 奖励 | 设计动机 |
-| --- | --- | --- |
-| 每步存活 | `+0.1` | 提供稠密生存信号，鼓励持续存活 |
-| 清除一个障碍物 | `+2.0` | 任务核心收益，显著高于单步存活奖励 |
-| 空中重复跳跃 | `-0.02` | 微小惩罚，抑制无效跳跃（spam jump） |
-| 碰撞死亡 | `-10.0` | 惩罚失败策略，强化避障学习 |
-
-奖励层级：清除障碍物 (+2.0) ≫ 存活 (+0.1/步) > 避免无效跳跃 (-0.02)
-
-成功指标：单回合清除障碍物数量 ≥ `success_threshold`（Dino 环境默认 15）记为成功。
-
-### 难度递增
-
-游戏速度每 700 帧增加 1（初始 4），障碍物与地面移动速度随之增加，要求智能体逐步适应越来越快的决策节奏。
-
-## 超参数配置
-
-所有超参数集中在 `config.py` 中，通过 frozen dataclass `Config` 管理。每个环境有独立的配置实例。
-
-### 通用超参数（Config 默认值）
-
-| 参数 | 默认值 | 说明 |
-| --- | --- | --- |
-| `episodes` | 1500 | 训练回合数 |
-| `max_steps_per_episode` | 200 | 单回合最大步数（截断条件） |
-| `batch_size` | 64 | 每次更新的批次大小 |
-| `gamma` | 0.99 | 折扣因子 |
-| `learning_rate` | 5e-4 | Adam 优化器学习率 |
-| `hidden_dim` | 128 | Q 网络隐藏层维度 |
-| `epsilon_start` | 1.0 | 初始探索率 |
-| `epsilon_end` | 0.05 | 最终探索率 |
-| `epsilon_decay_steps` | 10000 | ε 线性衰减步数（按 train_steps 计算） |
-| `replay_buffer_size` | 50000 | 经验回放池容量 |
-| `min_replay_size` | 500 | 开始训练前缓冲区最小经验数 |
-| `target_update_freq` | 1000 | 目标网络同步频率（按 train_steps） |
-| `gradient_clip_norm` | 10.0 | 梯度裁剪阈值 |
-| `use_double_dqn` | False | 是否启用 Double DQN |
-| `warmup_steps` | 0 | 随机探索热身步数（按 env_steps 计算） |
-| `eval_interval_episodes` | 50 | 评估间隔（回合数） |
-| `eval_episodes` | 10 | 每次评估的回合数 |
-
-### PER 专属超参数（PerConfig）
-
-| 参数 | 默认值 | 说明 |
-| --- | --- | --- |
-| `alpha` | 0.6 | 优先级指数（0=均匀，1=完全 TD error 优先） |
-| `beta_start` | 0.4 | IS 权重 β 初始值 |
-| `beta_increment` | 5e-5 | 每次更新后 β 的增量（最终至 1.0） |
-| `priority_epsilon` | 1e-5 | 优先级平滑小量（防止零优先级） |
-
-### 环境专属配置
-
-| 参数 | Taxi-v3 | MountainCar-v0 | TrexEnv-v0 |
-| --- | --- | --- | --- |
-| `episodes` | 1800 | 3000 | 2000 |
-| `max_steps_per_episode` | 200 | 200 | 8000 |
-| `batch_size` | 64 | 128 | 128 |
-| `gamma` | 0.99 | 0.99 | 0.995 |
-| `learning_rate` | 3e-4 | 1e-3 | 1e-4 |
-| `hidden_dim` | 128 | 128 | 256 |
-| `epsilon_decay_steps` | 8000 | 20000 | 30000 |
-| `replay_buffer_size` | 30000 | 100000 | 100000 |
-| `min_replay_size` | 500 | 2000 | 5000 |
-| `target_update_freq` | 500 | 1000 | 2000 |
-| `gradient_clip_norm` | 10.0 | 10.0 | 5.0 |
-| `success_threshold` | 1 | 1 | 15 |
-| `use_double_dqn` | False | False | **True** |
-| `warmup_steps` | 0 | 0 | **5000** |
-
-## 运行实验
-
-### 安装依赖
+项目使用 Python 3.12+，依赖由 `pyproject.toml` 管理。
 
 ```powershell
 uv sync
 ```
 
-### 单次训练
+主要依赖包括：
+
+- `torch`
+- `gymnasium[other]`
+- `numpy`
+- `pygame`
+- `matplotlib`
+- `opencv-python`
+- `tqdm`
+
+## 快速开始
+
+单次训练：
 
 ```powershell
 python train.py
 ```
 
-默认环境与算法可在 `train.py` 中修改（当前默认 `dino` + `perdqn`）。
+当前 `train.py` 默认运行：
 
-### 模型评估
+```python
+train(
+    env_name="dino",
+    algo_name="dqn",
+    render=False,
+    plot_after_train=True,
+)
+```
+
+评估指定模型：
 
 ```powershell
 python eval.py
 ```
 
-加载训练保存的最佳模型，使用 ε=0 进行确定性评估。
-
-### 批量对比实验
+批量实验：
 
 ```powershell
 python experiment.py
 ```
 
-遍历 `[taxi, mountaincar, dino] × [dqn, perdqn] × [42, 52, 62]` 共 18 组实验，结果汇总至 `results/logs/experiment_summary.csv`。
+生成实验汇总：
 
-### 生成对比图
+```powershell
+python summary.py results\0513-2330-experiment
+```
+
+生成对比图：
 
 ```powershell
 python compare_plots.py
 ```
 
-基于训练日志生成 DQN 与 PER-DQN 的奖励、步数、损失和任务指标对比曲线，保存至 `results/figures/`。
+## 算法实现
 
-## 论文预期证据
+### DQN
 
-建议在论文中展示以下实验结果：
+`DQNAgent` 位于 `DQN/agents/dqn_agent.py`，包含：
 
-- 三个环境下 DQN 与 PER-DQN 的**平均奖励曲线**（含多种子均值与标准差）
-- **成功率或任务指标曲线**：Taxi/MountainCar 使用 success rate，Dino 使用 `obstacles_cleared`
-- **收敛速度对比**：PER-DQN 是否在更少的环境交互步数下达到同等或更高性能
-- **消融分析**（可选）：
-  - Double DQN 对 Dino 环境的过估计缓解效果
-  - warmup 阶段对训练初期稳定性的影响
-  - α 与 β 超参数对 PER 性能的敏感性
+- epsilon-greedy 探索
+- 经验回放
+- target Q-network
+- Huber loss（`SmoothL1Loss`）
+- 梯度裁剪
+- 可选 Double DQN
+- 可选 soft target update
+- 可选 warmup 随机探索阶段
+
+Q 网络定义在 `DQN/q_network.py`，当前结构为：
+
+```text
+Linear -> LayerNorm -> SiLU -> Linear -> LayerNorm -> SiLU -> Linear
+```
+
+### PER-DQN
+
+`PERDQNAgent` 继承 `DQNAgent`，将普通 replay buffer 替换为 `PrioritizedReplayBuffer`。
+
+当前 PER 实现包含：
+
+- SumTree 优先级采样
+- TD error 更新优先级
+- importance sampling weights
+- beta 从 `beta_start` 线性退火到 `1.0`
+
+优先级公式：
+
+```text
+priority = (abs(td_error) + priority_epsilon) ** alpha
+```
+
+IS 权重会除以 batch 内最大权重，使最大权重归一化为 `1.0`。
+
+## 当前环境配置
+
+配置集中在 `config.py`。
+
+### 通用配置字段
+
+`Config` 中的主要字段包括：
+
+- `episodes`
+- `max_steps_per_episode`
+- `final_test_episodes`
+- `eval_interval_episodes`
+- `eval_episodes`
+- `batch_size`
+- `seed`
+- `gamma`
+- `learning_rate`
+- `hidden_dim`
+- `epsilon_start`
+- `epsilon_end`
+- `epsilon_decay_steps`
+- `replay_buffer_size`
+- `min_replay_size`
+- `target_update_freq`
+- `soft_target_update`
+- `target_update_tau`
+- `success_threshold`
+- `gradient_clip_norm`
+- `use_double_dqn`
+- `warmup_steps`
+
+### 环境默认值
+
+| 环境 | env_id | episodes | max steps | batch | lr | hidden | buffer | min replay | target update | Double DQN | soft target |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| `taxi` | `Taxi-v4` | 2000 | 200 | 64 | `5e-4` | 128 | 30000 | 500 | 500 | False | False |
+| `mountaincar` | `MountainCar-v0` | 2000 | 500 | 128 | `5e-4` | 128 | 100000 | 5000 | 1000 | False | False |
+| `dino` | `TrexEnv-v0` | 3000 | 8000 | 128 | `1e-5` | 256 | 200000 | 5000 | 2000 | False | True |
+
+注意：当前代码里 `taxi` 配置为 `Taxi-v4`。如果本地 Gymnasium 只提供 `Taxi-v3`，需要在 `config.py` 中改为 `Taxi-v3` 后再运行 Taxi 实验。
+
+### PER 默认值
+
+`PerConfig` 当前默认值：
+
+| 参数 | 默认值 | 说明 |
+| --- | ---: | --- |
+| `alpha` | 0.5 | 优先级强度 |
+| `beta_start` | 0.4 | IS 权重 beta 初始值 |
+| `beta_anneal_steps` | 180000 | beta 退火步数 |
+| `priority_epsilon` | `1e-4` | 防止零优先级 |
+
+## Dino / T-Rex 环境
+
+自定义环境位于 `DQN/envs/dino/env.py`，注册为 `TrexEnv-v0`。
+
+### 动作空间
+
+动作空间为 `Discrete(3)`：
+
+| Action | 含义 |
+| ---: | --- |
+| 0 | noop |
+| 1 | jump |
+| 2 | duck |
+
+### 观测空间
+
+当前 Dino 观测是 23 维连续向量，定义在 `TrexEnv._build_observation()` 中。状态会在 `DQN/utils/state_processor.py` 中按 `observation_space.low/high` 做 min-max 归一化。
+
+基础特征：
+
+| 索引 | 特征 |
+| ---: | --- |
+| 0 | dino 距离地面的高度 |
+| 1 | 垂直速度 |
+| 2 | 是否正在跳跃 |
+| 3 | 是否正在下蹲 |
+| 4 | 当前游戏速度 |
+| 5 | 当前是否可以跳跃 |
+| 6 | 最近两个障碍物间距 |
+
+随后分别追加最近两个障碍物的 8 个特征：
+
+| 特征 | 含义 |
+| --- | --- |
+| `obstacle_present` | 是否存在该障碍 |
+| `obstacle_type` | `0=cactus`，`1=ptera` |
+| `distance` | 障碍物到 dino 右侧的水平距离 |
+| `time_to_collision` | 按当前速度估算的碰撞时间 |
+| `width` | 障碍物宽度 |
+| `height` | 障碍物高度 |
+| `center_y` | 障碍物中心 y 坐标 |
+| `relative_y` | 障碍物中心与 dino 中心的相对 y 坐标 |
+
+因此总维度为：
+
+```text
+7 + 8 * 2 = 23
+```
+
+### 奖励设计
+
+当前奖励逻辑在 `TrexEnv._compute_reward()` 中：
+
+| 事件 | 奖励 |
+| --- | ---: |
+| 每步存活 | `+0.01` |
+| 通过障碍物 | `0.0 * newly_cleared` |
+| 碰撞死亡 | `-1.0` |
+| 空中重复跳跃 | `0.0` |
+
+`obstacles_cleared` 仍会被统计，并作为 Dino 的自定义任务指标。成功判定为：
+
+```text
+obstacles_cleared >= config.success_threshold
+```
+
+当前 Dino 的 `success_threshold` 为 `20`。
+
+### 难度递增
+
+Dino 每 700 帧提升一次速度：
+
+```text
+gamespeed += 1
+```
+
+地面和障碍物移动速度会同步加快。
+
+## 状态预处理
+
+`DQN/utils/state_processor.py` 对不同环境做统一处理：
+
+- Taxi：离散状态转 one-hot
+- MountainCar：按固定上下界归一化到 `[0, 1]`
+- Dino：按环境 `observation_space.low/high` 归一化到 `[0, 1]`
+
+## 日志与输出
+
+每次训练会创建独立 run 目录：
+
+```text
+results/<timestamp>-<env>-<algo>-seed<seed>/
+|-- logs/
+|-- models/
+`-- figures/
+```
+
+训练日志字段包括：
+
+- `episode`
+- `total_reward`
+- `steps`
+- `epsilon`
+- `loss`
+- `success`
+- `custom_metric`
+- `reward_per_step`
+- `eval_avg_reward`
+- `eval_success_rate`
+- PER 相关指标：`per_beta`、`per_mean_abs_td_error`、`per_mean_weight` 等
+- Dino 相关指标：`score`、`speed`、`obstacles_cleared`
+- MountainCar 相关指标：`max_position`
+
+训练会保存：
+
+- best model：按定期评估平均奖励选择
+- final model：训练结束时的模型
+
+如果 `run_final_test=True`，训练结束后会分别测试 best 和 final 模型。
+
+## 实验结果解读
+
+建议重点比较：
+
+- 平均奖励曲线
+- 平均步数曲线
+- success rate
+- Dino 的 `obstacles_cleared`
+- MountainCar 的 `max_position`
+- PER 的 TD error 与 IS weight 指标
+
+当前 Dino 奖励中没有通过障碍物的额外正奖励，因此 `total_reward` 主要反映存活时长；如果论文目标强调清障能力，建议同时报告 `obstacles_cleared`，不要只看 reward。
+
+## 已知注意事项
+
+- `README.md` 已按当前源码更新；旧实验说明中的 15 维 Dino 观测、过障碍 `+2`、死亡 `-10` 等不再符合当前代码。
+- `taxi` 当前配置为 `Taxi-v4`，部分 Gymnasium 版本只提供 `Taxi-v3`。
+- `compare_plots.py`、`eval.py`、`plot_log.py` 中存在一些面向本机历史结果的默认路径，复现实验时可能需要改成自己的 run 目录。
+- Windows 路径字符串建议使用 raw string 或正斜杠，避免 `SyntaxWarning: invalid escape sequence`。
